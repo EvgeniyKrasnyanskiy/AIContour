@@ -1981,6 +1981,26 @@ if PYQT_AVAILABLE:
             license_group_layout.addWidget(self.btn_manage_licenses)
             license_group_layout.addWidget(self.lbl_license_status)
             admin_settings_layout.addWidget(license_group)
+
+            # Группа: Управление моделями ИИ 📦
+            models_group = QGroupBox("Управление моделями ИИ 📦")
+            models_group_layout = QVBoxLayout(models_group)
+            models_group_layout.setSpacing(10)
+            
+            lbl_models_descr = QLabel(
+                "Вы можете предварительно скачать необходимые модели ИИ на локальный диск сервера для ускорения работы или удалить их."
+            )
+            lbl_models_descr.setWordWrap(True)
+            lbl_models_descr.setStyleSheet("color: #888888; font-size: 11px;")
+            
+            self.btn_manage_models = QPushButton("📦 Модели")
+            self.btn_manage_models.setObjectName("btnAction")
+            self.btn_manage_models.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_manage_models.clicked.connect(self.show_models_dialog)
+            
+            models_group_layout.addWidget(lbl_models_descr)
+            models_group_layout.addWidget(self.btn_manage_models)
+            admin_settings_layout.addWidget(models_group)
  
             # Группа 6: Параметры соединения с сервером AI Contour 🌐
             conn_group = QGroupBox("Соединение с сервером AI Contour 🌐")
