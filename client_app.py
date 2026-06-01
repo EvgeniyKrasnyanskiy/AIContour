@@ -1573,8 +1573,31 @@ if PYQT_AVAILABLE:
             hbox_monaco.addWidget(self.elekta_monaco_aet_edit)
             hbox_monaco.addWidget(lbl_monaco_port_desc)
             hbox_monaco.addWidget(self.elekta_monaco_port_edit)
-            hbox_monaco.addStretch()
             elekta_settings_layout.addLayout(hbox_monaco, 1, 1)
+            
+            # Строка 2: Monaco IP и Кнопка проверки связи
+            lbl_monaco_ip_desc = QLabel("IP Монако:")
+            lbl_monaco_ip_desc.setStyleSheet("color: #a0a0a0; font-weight: bold;")
+            
+            self.elekta_monaco_ip_edit = QLineEdit("127.0.0.1")
+            self.elekta_monaco_ip_edit.setPlaceholderText("127.0.0.1")
+            self.elekta_monaco_ip_edit.setFixedWidth(120)
+            
+            self.btn_ping_monaco = QPushButton("⚡ Проверить связь")
+            self.btn_ping_monaco.setObjectName("btnAction")
+            self.btn_ping_monaco.setMinimumHeight(24)
+            self.btn_ping_monaco.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_ping_monaco.clicked.connect(self.ping_monaco_connection)
+            
+            hbox_ping = QHBoxLayout()
+            hbox_ping.setContentsMargins(0, 0, 0, 0)
+            hbox_ping.setSpacing(6)
+            hbox_ping.addWidget(self.elekta_monaco_ip_edit)
+            hbox_ping.addWidget(self.btn_ping_monaco)
+            hbox_ping.addStretch()
+            
+            elekta_settings_layout.addWidget(lbl_monaco_ip_desc, 2, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            elekta_settings_layout.addLayout(hbox_ping, 2, 1)
             
             self.elekta_settings_widget.setVisible(False)
             input_group_layout.addWidget(self.elekta_settings_widget)
@@ -2229,6 +2252,70 @@ if PYQT_AVAILABLE:
             """Открывает окно управления моделями ИИ."""
             dialog = ModelsDialog(self, self.engine)
             dialog.exec()
+
+        def ping_monaco_connection(self):
+            """Выполняет экспресс-проверку DICOM C-ECHO соединения со станцией Monaco."""
+            ip = self.elekta_monaco_ip_edit.text().strip()
+            port_str = self.elekta_monaco_port_edit.text().strip()
+            aet = self.elekta_monaco_aet_edit.text().strip()
+            
+            if not ip:
+                QMessageBox.warning(self, "Предупреждение", "Пожалуйста, введите IP-адрес станции Monaco.")
+                return
+                
+            if not port_str.isdigit():
+                QMessageBox.warning(self, "Предупреждение", "Порт Monaco должен быть числом.")
+                return
+                
+            port = int(port_str)
+            
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            self.btn_ping_monaco.setEnabled(False)
+            
+            # Фоновый поток для предотвращения фриза GUI при таймауте
+            class EchoWorker(QThread):
+                finished = pyqtSignal(bool, str)
+                
+                def __init__(self, ip, port, aet):
+                    super().__init__()
+                    self.ip = ip
+                    self.port = port
+                    self.aet = aet
+                    
+                def run(self):
+                    try:
+                        from pynetdicom import AE
+                        from pynetdicom.sop_class import VerificationSOPClass
+                        
+                        ae = AE(ae_title=b"AIC_TEST_SCU")
+                        ae.add_requested_context(VerificationSOPClass)
+                        
+                        # Выполняем проверку C-ECHO
+                        assoc = ae.associate(self.ip, self.port, ae_title=self.aet.encode('utf-8'))
+                        if assoc.is_established:
+                            status = assoc.send_c_echo()
+                            assoc.release()
+                            if status and getattr(status, 'Status', None) == 0x0000:
+                                self.finished.emit(True, "Соединение успешно установлено! Monaco отвечает на DICOM Echo (C-ECHO) ✅")
+                            else:
+                                self.finished.emit(False, f"Ассоциация установлена, но Monaco отклонил Echo. Статус: {status} ❌")
+                        else:
+                            self.finished.emit(False, "Не удалось установить DICOM-соединение с Monaco.\nПроверьте IP-адрес, Порт и AE Title ❌")
+                    except Exception as e:
+                        self.finished.emit(False, f"Ошибка при проверке соединения: {e} ❌")
+            
+            self.echo_thread = EchoWorker(ip, port, aet)
+            
+            def on_echo_finished(success, message):
+                QApplication.restoreOverrideCursor()
+                self.btn_ping_monaco.setEnabled(True)
+                if success:
+                    QMessageBox.information(self, "Успех ✅", message)
+                else:
+                    QMessageBox.critical(self, "Ошибка соединения ❌", message)
+                    
+            self.echo_thread.finished.connect(on_echo_finished)
+            self.echo_thread.start()
 
         def on_sound_check_changed(self):
             self.save_settings()
