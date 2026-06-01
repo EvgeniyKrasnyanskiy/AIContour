@@ -2285,10 +2285,9 @@ if PYQT_AVAILABLE:
                 def run(self):
                     try:
                         from pynetdicom import AE
-                        from pynetdicom.sop_class import VerificationSOPClass
                         
                         ae = AE(ae_title=b"AIC_TEST_SCU")
-                        ae.add_requested_context(VerificationSOPClass)
+                        ae.add_requested_context('1.2.840.10008.1.1')
                         
                         # Выполняем проверку C-ECHO
                         assoc = ae.associate(self.ip, self.port, ae_title=self.aet.encode('utf-8'))
