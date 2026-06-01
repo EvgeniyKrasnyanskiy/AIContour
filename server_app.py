@@ -2710,6 +2710,7 @@ if PYQT_AVAILABLE:
                     self.organs_list.addItem(item)
 
             self.is_updating_presets = False
+            self.restore_group_visibilities()
             self.update_checked_organs_count()
 
         def update_item_color_icon(self, item: QListWidgetItem, organ_name: str):
