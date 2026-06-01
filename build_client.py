@@ -99,6 +99,19 @@ def build_executable(has_icon):
     if has_icon:
         args.append("--icon=app_icon.ico")
         
+    # ДОБАВЛЯЕМ СКРЫТЫЕ ИМПОРТЫ ДЛЯ PYDICOM И PYNETDICOM (важно для Elekta mod)
+    try:
+        from PyInstaller.utils.hooks import collect_submodules
+        pydicom_subs = collect_submodules('pydicom')
+        pynetdicom_subs = collect_submodules('pynetdicom')
+        print(f"[INFO] Собрано {len(pydicom_subs)} подмодулей pydicom и {len(pynetdicom_subs)} подмодулей pynetdicom для hidden-import.")
+        for m in pydicom_subs + pynetdicom_subs:
+            args.append(f"--hidden-import={m}")
+    except Exception as e:
+        print(f"[WARNING] Не удалось автоматически собрать подмодули: {e}. Используем базовые hidden-imports.")
+        args.append("--hidden-import=pydicom")
+        args.append("--hidden-import=pynetdicom")
+
     # ИСКЛЮЧАЕМ ТЯЖЕЛЫЕ БИБЛИОТЕКИ СЕРВЕРА
     # Это ключевой момент, чтобы клиент весил 50МБ, а не 3ГБ!
     heavy_excludes = [
