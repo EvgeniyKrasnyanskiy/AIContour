@@ -1566,7 +1566,8 @@ if PYQT_AVAILABLE:
             self.collapsed_groups = {"Остальное": True, "Отделы головного мозга (Brain Structures)": True}
             self.worker = None
             self.active_workers = []
-            self.settings = QSettings("AIContourCorp", "AIContour")
+            os.makedirs("config", exist_ok=True)
+            self.settings = QSettings("config/server_settings.ini", QSettings.Format.IniFormat)
 
             # Инициализация вычислительного движка
             self.engine = ContourEngine()

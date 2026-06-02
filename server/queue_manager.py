@@ -29,18 +29,20 @@ from contour_engine import ContourEngine
 
 def _get_server_use_gpu_setting() -> bool:
     """
-    Безопасно считывает локальную настройку использования GPU с сервера из реестра Windows.
-    Если ОС отличная от Windows или ключ отсутствует, возвращает True по умолчанию.
+    Безопасно считывает локальную настройку использования GPU с сервера из файла config/server_settings.ini.
     """
-    if sys.platform != 'win32':
-        return True
+    import configparser
     try:
-        import winreg
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\AIContourCorp\AIContour")
-        val, _ = winreg.QueryValueEx(key, "use_gpu")
-        if isinstance(val, str):
-            return val.strip().lower() == "true"
-        return bool(val)
+        ini_path = Path(__file__).resolve().parent.parent / "config" / "server_settings.ini"
+        if not ini_path.exists():
+            return True
+        
+        config = configparser.ConfigParser()
+        config.read(ini_path, encoding="utf-8")
+        
+        # QSettings по умолчанию сохраняет в секцию [General]
+        val = config.get("General", "use_gpu", fallback="true")
+        return val.strip().lower() == "true"
     except Exception:
         return True
 
