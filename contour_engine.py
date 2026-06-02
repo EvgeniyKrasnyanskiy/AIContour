@@ -50,7 +50,10 @@ try:
     original_create_contour = rt_utils.ds_helper.create_contour
 
     def patched_create_contour(series_slice, contour_data):
-        rounded_data = np.around(contour_data, decimals=4)
+        # Используем np.around, но преобразуем результат в список стандартных Python float,
+        # так как pydicom плохо работает с numpy.float64 внутри списков при валидации DS.
+        rounded_arr = np.around(contour_data, decimals=4)
+        rounded_data = rounded_arr.tolist() if hasattr(rounded_arr, "tolist") else [float(x) for x in rounded_arr]
         return original_create_contour(series_slice, rounded_data)
 
     rt_utils.ds_helper.create_contour = patched_create_contour
