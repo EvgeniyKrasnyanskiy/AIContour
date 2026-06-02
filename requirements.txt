@@ -1,4 +1,6 @@
+--index-url https://pypi.tuna.tsinghua.edu.cn/simple
 --extra-index-url https://download.pytorch.org/whl/cu121
+--extra-index-url https://pypi.org/simple
 acvl_utils==0.2.6
 annotated-doc==0.0.4
 annotated-types==0.7.0
