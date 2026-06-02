@@ -26,6 +26,25 @@ logger = logging.getLogger("QueueManager")
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from contour_engine import ContourEngine
 
+
+def _get_server_use_gpu_setting() -> bool:
+    """
+    Безопасно считывает локальную настройку использования GPU с сервера из реестра Windows.
+    Если ОС отличная от Windows или ключ отсутствует, возвращает True по умолчанию.
+    """
+    if sys.platform != 'win32':
+        return True
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\AIContourCorp\AIContour")
+        val, _ = winreg.QueryValueEx(key, "use_gpu")
+        if isinstance(val, str):
+            return val.strip().lower() == "true"
+        return bool(val)
+    except Exception:
+        return True
+
+
 class ServerJob:
     """Класс, описывающий структуру задачи сегментации КТ."""
     def __init__(self, job_id: str, client_name: str, options: dict):
@@ -428,6 +447,9 @@ class QueueManager:
                     job.active_process = p
 
             # 3. Запускаем вычислительный пайплайн
+            final_use_gpu = _get_server_use_gpu_setting()
+            logger.info(f"[{job.job_id}] Режим расчета на сервере: {'GPU' if final_use_gpu else 'CPU'}")
+
             added_count, elapsed_time = self.engine.run_pipeline(
                 dicom_dir_path=str(extracted_dicom_dir),
                 output_dir_path=str(output_workspace_dir),
@@ -436,7 +458,7 @@ class QueueManager:
                 selected_organs=job.options.get("selected_organs"),
                 merge_mode=job.options.get("merge_mode", "merge"),
                 existing_rtstruct_path=self._find_existing_rtstruct(extracted_dicom_dir),
-                use_gpu=job.options.get("use_gpu", False),
+                use_gpu=final_use_gpu,
                 remove_blobs=job.options.get("remove_blobs", False),
                 smoothing_sigma=job.options.get("smoothing_sigma", 0.0),
                 step_callback=step_cb,
