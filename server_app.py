@@ -5652,6 +5652,10 @@ if PYQT_AVAILABLE:
             )
             if reply == QMessageBox.StandardButton.Yes:
                 logging.info("Закрытие панели управления сервером...")
+                try:
+                    self.save_settings()
+                except Exception as se:
+                    logging.error(f"Не удалось сохранить настройки при закрытии: {se}")
                 
                 # Останавливаем всех активных воркеров оконтуривания
                 if hasattr(self, 'active_workers'):
