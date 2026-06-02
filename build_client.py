@@ -35,21 +35,54 @@ def check_and_install_dependencies():
         venv_pip = str(venv_pip)
         print(f"[INFO] Обнаружен pip в виртуальном окружении: {venv_pip}")
         
+    def install_with_fallbacks(package_name):
+        """Пытается установить пакет через pip, поочередно пробуя различные зеркала PyPI в случае сбоя."""
+        print(f"[INFO] Попытка установки {package_name} через официальный PyPI...")
+        try:
+            subprocess.check_call([venv_pip, "install", package_name])
+            print(f"[OK] {package_name} успешно установлен.")
+            return True
+        except subprocess.CalledProcessError:
+            print(f"[WARNING] Не удалось установить {package_name} через официальный PyPI.")
+
+        # Альтернативные зеркала в заданном порядке приоритета
+        mirrors = [
+            ("Tsinghua University (Китай)", "https://pypi.tuna.tsinghua.edu.cn/simple"),
+            ("Douban (Китай)", "https://pypi.doubanio.com/simple"),
+            ("Яндекс (Россия)", "https://pypi.yandex.ru/simple")
+        ]
+
+        for name, url in mirrors:
+            print(f"[INFO] Попытка установки {package_name} через зеркало {name} ({url})...")
+            try:
+                host = url.split("//")[1].split("/")[0]
+                subprocess.check_call([
+                    venv_pip, "install", package_name, 
+                    "--index-url", url, 
+                    "--trusted-host", host
+                ])
+                print(f"[OK] {package_name} успешно установлен через зеркало {name}!")
+                return True
+            except subprocess.CalledProcessError:
+                print(f"[WARNING] Не удалось установить {package_name} через зеркало {name}.")
+
+        raise RuntimeError(f"Критическая ошибка: Не удалось установить пакет {package_name} ни из одного источника.")
+
     try:
         # Проверяем pyinstaller
         import pyinstaller
         print("[OK] PyInstaller уже установлен.")
     except ImportError:
-        print("[INFO] Установка PyInstaller...")
-        subprocess.check_call([venv_pip, "install", "pyinstaller"])
+        print("[INFO] PyInstaller не найден. Запуск установки...")
+        install_with_fallbacks("pyinstaller")
         
     try:
         # Проверяем pillow (нужен для генерации иконки)
         from PIL import Image
         print("[OK] Pillow уже установлен.")
     except ImportError:
-        print("[INFO] Установка Pillow для конвертации иконки...")
-        subprocess.check_call([venv_pip, "install", "pillow"])
+        print("[INFO] Pillow не найден. Запуск установки для конвертации иконки...")
+        install_with_fallbacks("pillow")
 
 def generate_ico_icon():
     print_banner("2. Генерация иконки приложения")
@@ -99,6 +132,19 @@ def build_executable(has_icon):
     if has_icon:
         args.append("--icon=app_icon.ico")
         
+    # ДОБАВЛЯЕМ СКРЫТЫЕ ИМПОРТЫ ДЛЯ PYDICOM И PYNETDICOM (важно для Elekta mod)
+    try:
+        from PyInstaller.utils.hooks import collect_submodules
+        pydicom_subs = collect_submodules('pydicom')
+        pynetdicom_subs = collect_submodules('pynetdicom')
+        print(f"[INFO] Собрано {len(pydicom_subs)} подмодулей pydicom и {len(pynetdicom_subs)} подмодулей pynetdicom для hidden-import.")
+        for m in pydicom_subs + pynetdicom_subs:
+            args.append(f"--hidden-import={m}")
+    except Exception as e:
+        print(f"[WARNING] Не удалось автоматически собрать подмодули: {e}. Используем базовые hidden-imports.")
+        args.append("--hidden-import=pydicom")
+        args.append("--hidden-import=pynetdicom")
+
     # ИСКЛЮЧАЕМ ТЯЖЕЛЫЕ БИБЛИОТЕКИ СЕРВЕРА
     # Это ключевой момент, чтобы клиент весил 50МБ, а не 3ГБ!
     heavy_excludes = [

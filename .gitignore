@@ -47,3 +47,6 @@ jobs/
 # Временные отчеты
 changes_today.txt
 
+# PyInstaller spec files
+*.spec
+
