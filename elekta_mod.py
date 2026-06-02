@@ -57,6 +57,8 @@ class DicomReceiver(QObject):
         
         ae = AE(ae_title=self.ae_title.encode('utf-8'))
         ae.supported_contexts = StoragePresentationContexts
+        # Добавляем класс верификации (C-ECHO), чтобы Monaco мог успешно пинговать приемник
+        ae.add_supported_context('1.2.840.10008.1.1')
 
         def handle_store(event) -> int:
             try:
