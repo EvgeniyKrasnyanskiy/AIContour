@@ -189,23 +189,8 @@ def package_portable_zip():
     # Если на клиенте потребуется записать статистику, StatisticsManager создаст config/ автоматически.
     print("[INFO] Пропуск копирования папки config/ (все настройки запрашиваются с сервера).")
         
-    # 3. Создаем README
-    readme_content = """=== AI Contour Client - Портативная версия ===
-
-Инструкция по запуску и работе на компьютерах клиники:
-1. Распакуйте содержимое архива в любую удобную папку на компьютере врача.
-2. Запустите файл `AIContourClient.exe`.
-3. Для работы программы НЕ ТРЕБУЕТСЯ установленный Python или мощная видеокарта.
-4. Все конфигурации (цвета OAR, пресеты, переводы) динамически загружаются с сервера при подключении.
-5. При первом запуске перейдите в раздел "Настройки" (иконка шестеренки сверху) 
-   и укажите IP-адрес запущенного в клинике ИИ-сервера (например, http://192.168.1.100:8000).
-
-Разработано для EvgeniyKrasnyanskiy/AIContur
-"""
-    readme_path = package_dir / "README_portable.txt"
-    with open(readme_path, "w", encoding="utf-8") as f:
-        f.write(readme_content)
-    print("[INFO] Создан файл README_portable.txt.")
+    # 3. Исключено создание README_portable.txt по требованию пользователя
+    pass
         
     # 4. Упаковываем все в ZIP
     zip_filename = dist_dir / "AIContourClient_Portable.zip"

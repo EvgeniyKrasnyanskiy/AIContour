@@ -42,6 +42,22 @@ from scipy.ndimage import label, gaussian_filter
 # Настройка локального логера движка
 logger = logging.getLogger("ContourEngine")
 
+# Динамический патч для rt-utils для соблюдения стандарта DICOM (длина строк типа DS не более 16 символов).
+# Округляет координаты точек контуров до 4 знаков после запятой, что полностью решает проблему
+# падений импорта в Monaco ("DICOM::VRDS value string over maximum") и черного экрана во вьюере.
+try:
+    import rt_utils.ds_helper
+    original_create_contour = rt_utils.ds_helper.create_contour
+
+    def patched_create_contour(series_slice, contour_data):
+        rounded_data = np.around(contour_data, decimals=4)
+        return original_create_contour(series_slice, rounded_data)
+
+    rt_utils.ds_helper.create_contour = patched_create_contour
+    logger.info("Успешно применен патч округления координат RTSTRUCT для Monaco.")
+except Exception as pe:
+    logger.warning(f"Не удалось применить патч координат RTSTRUCT: {pe}")
+
 from config import ROI_TO_TASK_MAP, FILE_NAME_MAP, MONACO_NAMES_MAP, LICENSED_TASKS
 
 # Дефолтные настройки для автогенерации presets.json при его отсутствии
