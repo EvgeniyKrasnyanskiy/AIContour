@@ -1874,6 +1874,8 @@ if PYQT_AVAILABLE:
             # На клиенте обе опции (GPU/CPU) всегда доступны для выбора, так как вычисления идут на сервере
             self.radio_gpu.setChecked(True)
             self.radio_gpu.setEnabled(True)
+            self.radio_gpu.toggled.connect(self.save_settings)
+            self.radio_cpu.toggled.connect(self.save_settings)
                 
             device_group_layout.addWidget(self.radio_gpu)
             device_group_layout.addWidget(self.radio_cpu)
