@@ -132,18 +132,20 @@ def build_executable(has_icon):
     if has_icon:
         args.append("--icon=app_icon.ico")
         
-    # ДОБАВЛЯЕМ СКРЫТЫЕ ИМПОРТЫ ДЛЯ PYDICOM И PYNETDICOM (важно для Elekta mod)
+    # ДОБАВЛЯЕМ СКРЫТЫЕ ИМПОРТЫ ДЛЯ PYDICOM, PYNETDICOM И PYQTGRAPH
     try:
         from PyInstaller.utils.hooks import collect_submodules
         pydicom_subs = collect_submodules('pydicom')
         pynetdicom_subs = collect_submodules('pynetdicom')
-        print(f"[INFO] Собрано {len(pydicom_subs)} подмодулей pydicom и {len(pynetdicom_subs)} подмодулей pynetdicom для hidden-import.")
-        for m in pydicom_subs + pynetdicom_subs:
+        pyqtgraph_subs = collect_submodules('pyqtgraph')
+        print(f"[INFO] Собрано {len(pydicom_subs)} подмодулей pydicom, {len(pynetdicom_subs)} pynetdicom и {len(pyqtgraph_subs)} pyqtgraph.")
+        for m in pydicom_subs + pynetdicom_subs + pyqtgraph_subs:
             args.append(f"--hidden-import={m}")
     except Exception as e:
         print(f"[WARNING] Не удалось автоматически собрать подмодули: {e}. Используем базовые hidden-imports.")
         args.append("--hidden-import=pydicom")
         args.append("--hidden-import=pynetdicom")
+        args.append("--hidden-import=pyqtgraph")
 
     # ИСКЛЮЧАЕМ ТЯЖЕЛЫЕ БИБЛИОТЕКИ СЕРВЕРА
     # Это ключевой момент, чтобы клиент весил 50МБ, а не 3ГБ!
@@ -183,17 +185,9 @@ def package_portable_zip():
     print(f"[INFO] Копируем {exe_file.name} в портативный каталог...")
     shutil.copy2(exe_file, package_dir / exe_file.name)
     
-    # 2. Копируем внешнюю папку настроек config/ (пользователь сможет редактировать пресеты/цвета)
-    if config_src.exists() and config_src.is_dir():
-        print("[INFO] Копируем конфигурационную папку config/...")
-        shutil.copytree(config_src, package_dir / "config")
-        
-        # Удаляем временную статистику и логи, если они есть
-        stats_file = package_dir / "config" / "statistics.json"
-        if stats_file.exists():
-            stats_file.unlink()
-    else:
-        print("[WARNING] Исходная папка config/ не найдена! Портативная сборка может быть неполной.")
+    # 2. Исключаем копирование папки config/, так как клиент получает настройки с сервера.
+    # Если на клиенте потребуется записать статистику, StatisticsManager создаст config/ автоматически.
+    print("[INFO] Пропуск копирования папки config/ (все настройки запрашиваются с сервера).")
         
     # 3. Создаем README
     readme_content = """=== AI Contour Client - Портативная версия ===
@@ -202,8 +196,7 @@ def package_portable_zip():
 1. Распакуйте содержимое архива в любую удобную папку на компьютере врача.
 2. Запустите файл `AIContourClient.exe`.
 3. Для работы программы НЕ ТРЕБУЕТСЯ установленный Python или мощная видеокарта.
-4. ВНИМАНИЕ: Папка `config/` обязательно должна находиться рядом с файлом `AIContourClient.exe`.
-   В этой папке хранятся анатомические пресеты, цвета контуров и переводы.
+4. Все конфигурации (цвета OAR, пресеты, переводы) динамически загружаются с сервера при подключении.
 5. При первом запуске перейдите в раздел "Настройки" (иконка шестеренки сверху) 
    и укажите IP-адрес запущенного в клинике ИИ-сервера (например, http://192.168.1.100:8000).
 
