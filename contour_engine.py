@@ -689,6 +689,27 @@ class ContourEngine:
         except Exception as e:
             logger.error(f"Не удалось завершить автоматическую миграцию: {e}")
 
+    def load_presets_config_if_changed(self) -> None:
+        """
+        Перезагружает конфигурацию и лицензии, только если файлы в папке config/ изменились на диске.
+        Это предотвращает избыточное чтение диска и обеспечивает динамическую синхронизацию
+        между GUI сервера и процессом FastAPI.
+        """
+        try:
+            config_dir = Path("config").resolve()
+            licenses_path = config_dir / "licenses.json"
+            
+            # Проверяем mtime для licenses.json
+            mtime = 0.0
+            if licenses_path.exists():
+                mtime = licenses_path.stat().st_mtime
+                
+            if not hasattr(self, "_last_licenses_mtime") or self._last_licenses_mtime != mtime:
+                self._last_licenses_mtime = mtime
+                self.load_presets_config()
+        except Exception as e:
+            logger.debug(f"Ошибка проверки изменения licenses.json: {e}")
+
     def load_presets_config(self) -> None:
         """
         Загружает пресеты, цвета, переводы и лицензии из папки config/.

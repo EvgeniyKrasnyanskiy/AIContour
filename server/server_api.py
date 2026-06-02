@@ -321,10 +321,16 @@ def get_server_status():
     """
     Возвращает общие показатели состояния сервера и список задач.
     """
+    try:
+        queue_manager.engine.load_presets_config_if_changed()
+    except Exception as e:
+        logger.error(f"Ошибка проверки изменения конфигурации бэкенда: {e}")
+        
     return {
         "is_paused": queue_manager.is_paused,
         "pending_count": len(queue_manager.pending_queue),
-        "jobs": queue_manager.get_queue_info()
+        "jobs": queue_manager.get_queue_info(),
+        "licenses": getattr(queue_manager.engine, "licenses", "")
     }
 
 @app.post("/api/server/pause")
@@ -385,6 +391,11 @@ def get_server_config():
     Возвращает полную конфигурацию пресетов, цветов, переводов и лицензий с сервера.
     """
     engine = queue_manager.engine
+    try:
+        engine.load_presets_config()
+    except Exception as e:
+        logger.error(f"Ошибка фоновой перезагрузки конфигов в get_server_config: {e}")
+        
     return {
         "presets": engine.presets,
         "preset_colors": engine.preset_colors,

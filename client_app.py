@@ -2975,9 +2975,11 @@ if PYQT_AVAILABLE:
                 self.series_table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
                 
                 # Восстанавливаем выделение
+                force_viewer_update = False
                 if hasattr(self, '_auto_select_study_path') and self._auto_select_study_path:
                     selected_study_path = self._auto_select_study_path
                     self._auto_select_study_path = None
+                    force_viewer_update = True
 
                 if selected_study_path:
                     target_row = -1
@@ -2997,6 +2999,11 @@ if PYQT_AVAILABLE:
                 self.series_table.setUpdatesEnabled(True)
                 self.on_scan_finished()
                 self._is_updating_table = False
+                
+                # Если было автовыделение нового Monaco-исследования, форсируем обновление вьюера теперь, когда флаг сброшен!
+                if force_viewer_update and selected_study_path:
+                    logger.info(f"Форсированное обновление вьюера для Monaco-исследования: {selected_study_path}")
+                    self.on_series_selected()
             
         def update_run_button(self, is_patient_selected: bool, custom_text: str = None):
             # Поиск активного воркера для выделенного в таблице пациента
@@ -5138,6 +5145,17 @@ if PYQT_AVAILABLE:
         def on_status_received(self, data: dict):
             """Слот обработки успешно полученного статуса сервера из фонового потока."""
             try:
+                # Динамическая синхронизация лицензии суб-моделей
+                new_license = data.get("licenses", "")
+                old_license = getattr(self.engine, "licenses", "")
+                if isinstance(new_license, str) and new_license != old_license:
+                    logger.info(f"Динамическая синхронизация лицензии с сервером: '{old_license}' -> '{new_license}'.")
+                    self.engine.licenses = new_license
+                    if hasattr(self.engine, "save_presets_config"):
+                        self.engine.save_presets_config()
+                    self.init_presets_and_organs()
+                    self.update_license_status_label()
+
                 is_paused = data.get("is_paused", False)
                 self.is_server_online = True
                 self.is_client_blocked = False

@@ -101,9 +101,16 @@ class DicomReceiver(QObject):
                 self.study_received.emit(self.current_study_dir, self.current_patient_id or "")
                 self.received_files = []
 
+        def handle_abort(event) -> None:
+            if self.current_study_dir and self.received_files:
+                logger.warning(f"Ассоциация разорвана (Abort). Передача серии {self.current_study_dir} прервана/завершена аварийно. Файлов на диске: {len(self.received_files)}.")
+                self.study_received.emit(self.current_study_dir, self.current_patient_id or "")
+                self.received_files = []
+
         handlers = [
             (evt.EVT_C_STORE, handle_store),
-            (evt.EVT_RELEASED, handle_release)
+            (evt.EVT_RELEASED, handle_release),
+            (evt.EVT_ABORTED, handle_abort)
         ]
 
         try:
