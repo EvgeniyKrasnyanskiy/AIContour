@@ -125,6 +125,7 @@ def build_executable(has_icon):
         "--noconfirm",
         "--onefile",
         "--windowed",
+        "--add-data=app_icon.png;.",
         "--name=AIContourClient",
     ]
     

@@ -71,6 +71,12 @@ try:
 except ImportError:
     PYQT_AVAILABLE = False
 
+def get_resource_path(relative_path: str) -> str:
+    """Возвращает абсолютный путь к ресурсу, поддерживая запуск из собранного PyInstaller exe."""
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
+
 # Импортируем вычислительный движок или используем легковесный заглушечный класс для клиента
 try:
     from contour_engine import ContourEngine
@@ -1405,7 +1411,7 @@ if PYQT_AVAILABLE:
 
         def init_ui(self):
             # Установка премиальной иконки приложения
-            icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_icon.png")
+            icon_path = get_resource_path("app_icon.png")
             if os.path.exists(icon_path):
                 self.setWindowIcon(QIcon(icon_path))
 
@@ -6199,7 +6205,7 @@ if __name__ == "__main__":
         pass
 
     # Иконка на QApplication охватывает все окна приложения
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_icon.png")
+    icon_path = get_resource_path("app_icon.png")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
 
