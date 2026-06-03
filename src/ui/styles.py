@@ -180,7 +180,6 @@ QComboBox QAbstractItemView {
 }
 
 QComboBox QAbstractItemView::item {
-    color: #ffffff;
     background-color: #2d2d2d;
 }
 

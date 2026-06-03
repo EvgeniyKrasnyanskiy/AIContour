@@ -1898,9 +1898,22 @@ if PYQT_AVAILABLE:
                     self.gpu_combo.addItem(item_text)
                 
                 # Окрашивание
-                model = self.gpu_combo.model()
                 for i, gpu in enumerate(gpus):
-                    color = "#2ecc71" if gpu["is_compatible"] else "#e74c3c"
+                    cc_str = gpu.get("compute_capability", "0.0")
+                    try:
+                        major = int(cc_str.split('.')[0])
+                    except Exception:
+                        major = 0
+                    
+                    memory = gpu.get("memory_gb", 0.0)
+                    
+                    if major < 6 or memory < 8.0:
+                        color = "#e74c3c"  # Красный
+                    elif 8.0 <= memory <= 12.0:
+                        color = "#f1c40f"  # Желтый
+                    else:
+                        color = "#2ecc71"  # Зеленый
+                        
                     self.gpu_combo.setItemData(i, QBrush(QColor(color)), Qt.ItemDataRole.ForegroundRole)
             else:
                 self.gpu_combo.addItem("Нет доступных GPU CUDA")
