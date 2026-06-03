@@ -1428,6 +1428,13 @@ if PYQT_AVAILABLE:
             self.server_ui_timer.timeout.connect(self.update_client_queue_ui)
             self.server_ui_timer.start()
 
+            # Таймер автопроверки обновлений (раз в сутки в 12:00)
+            self.last_auto_update_date = self.settings.value("last_auto_update_date", "")
+            self.auto_update_timer = QTimer(self)
+            self.auto_update_timer.setInterval(30000)  # проверка каждые 30 секунд
+            self.auto_update_timer.timeout.connect(self.check_auto_update_time)
+            self.auto_update_timer.start()
+
             self.init_ui()
             
             # Выведем лог стартапа, если есть буферизованные записи
@@ -2454,6 +2461,44 @@ if PYQT_AVAILABLE:
             else:
                 self.lbl_update_status.setText("У вас установлена последняя версия приложения.")
                 self.lbl_update_status.setStyleSheet("color: #2ecc71;")
+
+        def check_auto_update_time(self):
+            from PyQt6.QtCore import QDate, QTime
+            current_time = QTime.currentTime()
+            current_date = QDate.currentDate().toString("yyyy-MM-dd")
+            
+            # Проверяем, наступило ли 12:00 и не выполнялась ли проверка сегодня
+            if current_time.hour() == 12 and current_time.minute() == 0:
+                if self.last_auto_update_date != current_date:
+                    self.last_auto_update_date = current_date
+                    self.settings.setValue("last_auto_update_date", current_date)
+                    
+                    # Запуск тихой фоновой проверки
+                    self.auto_update_thread = UpdateCheckerThread(self.get_client_version())
+                    self.auto_update_thread.finished_signal.connect(self.on_auto_update_check_finished)
+                    self.auto_update_thread.start()
+                    
+        def on_auto_update_check_finished(self, success: bool, latest_version: str, release_url: str, error_msg: str):
+            if not success:
+                return  # Тихо игнорируем сетевые сбои
+                
+            current = self.get_client_version()
+            try:
+                curr_parts = [int(x) for x in current.split(".")]
+                late_parts = [int(x) for x in latest_version.split(".")]
+                while len(curr_parts) < 3: curr_parts.append(0)
+                while len(late_parts) < 3: late_parts.append(0)
+                has_new = late_parts > curr_parts
+            except Exception:
+                has_new = latest_version != current
+                
+            if has_new:
+                # Обновляем статус в UI настроек, чтобы пользователь увидел информацию при переходе туда
+                self.lbl_update_status.setText(
+                    f"Доступна новая версия: <b style='color: #2ecc71;'>v{latest_version}</b> (установлена v{current}).<br>"
+                    f"<a href='{release_url}' style='color: #3498db; text-decoration: underline;'>Скачать обновление на GitHub</a>"
+                )
+                self.lbl_update_status.setStyleSheet("")
 
         def init_presets_and_organs(self):
             """Инициализирует комбобокс пресетов и список органов из конфигурации config/."""
