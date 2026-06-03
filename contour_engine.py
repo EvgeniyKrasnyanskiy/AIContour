@@ -881,6 +881,43 @@ class ContourEngine:
             return False
 
     @staticmethod
+    def get_gpus_info() -> List[dict]:
+        """
+        Возвращает список видеокарт (GPU) с информацией о названии, объеме памяти,
+        compute capability и совместимости для расчетов.
+        """
+        gpus = []
+        try:
+            import torch
+            if torch.cuda.is_available():
+                num_devices = torch.cuda.device_count()
+                for i in range(num_devices):
+                    name = torch.cuda.get_device_name(i)
+                    properties = torch.cuda.get_device_properties(i)
+                    major, minor = properties.major, properties.minor
+                    memory_gb = properties.total_memory / (1024 ** 3)
+                    
+                    # Проверка совместимости: CC >= 6.0 и память >= 3.8 ГБ
+                    is_compatible = (major >= 6) and (memory_gb >= 3.8)
+                    try:
+                        # Попробуем выделить тестовый тензор для проверки реальной работоспособности
+                        t = torch.zeros(1, device=f"cuda:{i}")
+                        del t
+                    except Exception:
+                        is_compatible = False
+                        
+                    gpus.append({
+                        "index": i,
+                        "name": name,
+                        "memory_gb": round(memory_gb, 1),
+                        "compute_capability": f"{major}.{minor}",
+                        "is_compatible": is_compatible
+                    })
+        except Exception:
+            pass
+        return gpus
+
+    @staticmethod
     def get_all_supported_organs() -> List[str]:
         """Динамически получает список всех органов из TotalSegmentator."""
         try:
@@ -956,7 +993,8 @@ class ContourEngine:
         step_callback: Optional[Callable[[str], None]] = None,
         progress_callback: Optional[Callable[[int, str], None]] = None,
         is_cancelled_cb: Optional[Callable[[], bool]] = None,
-        register_process_cb: Optional[Callable[[subprocess.Popen], None]] = None
+        register_process_cb: Optional[Callable[[subprocess.Popen], None]] = None,
+        selected_gpu: int = 0
     ) -> Tuple[int, float]:
         """
         Основной пайплайн выполнения автооконтурирования органов риска на КТ.
@@ -1230,6 +1268,10 @@ class ContourEngine:
                     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                     startupinfo.wShowWindow = subprocess.SW_HIDE
                     
+                env = os.environ.copy()
+                if use_gpu:
+                    env["CUDA_VISIBLE_DEVICES"] = str(selected_gpu)
+                
                 process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
@@ -1238,7 +1280,8 @@ class ContourEngine:
                     encoding="utf-8",
                     errors="replace",
                     bufsize=1,
-                    startupinfo=startupinfo
+                    startupinfo=startupinfo,
+                    env=env
                 )
                 
                 if register_process_cb:

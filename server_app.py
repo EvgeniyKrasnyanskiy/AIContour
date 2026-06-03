@@ -1554,6 +1554,20 @@ if PYQT_AVAILABLE:
             if self.parent_app:
                 self.parent_app.send_new_queue_order(new_job_ids)
 
+    def get_cpu_model() -> str:
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+            model, _ = winreg.QueryValueEx(key, "ProcessorNameString")
+            winreg.CloseKey(key)
+            return model.strip()
+        except Exception:
+            try:
+                import platform
+                return platform.processor() or "процессор"
+            except Exception:
+                return "процессор"
+
     class MainWindow(QMainWindow):
         """Главное окно графического интерфейса приложения."""
         def __init__(self):
@@ -1863,23 +1877,47 @@ if PYQT_AVAILABLE:
             
             tab2_layout.addWidget(merge_group)
             
-            gpu_available = self.engine.is_gpu_available()
-
             # Группа 1: Вычислительное устройство
             device_group = QGroupBox("Вычислительное устройство")
             device_group_layout = QVBoxLayout(device_group)
             device_group_layout.setSpacing(10)
-            self.radio_cpu = QRadioButton("CPU (Центральный процессор)")
-            self.radio_gpu = QRadioButton("GPU CUDA (Рекомендуется)")
             
-            # На клиенте обе опции (GPU/CPU) всегда доступны для выбора, так как вычисления идут на сервере
-            self.radio_gpu.setChecked(True)
-            self.radio_gpu.setEnabled(True)
+            cpu_model = get_cpu_model()
+            self.radio_cpu = QRadioButton(f"CPU ({cpu_model})")
+            self.radio_gpu = QRadioButton("GPU CUDA")
+            
+            self.gpu_combo = NonScrollComboBox()
+            self.gpu_combo.setStyleSheet("margin-left: 20px; padding: 4px;")
+            
+            # Заполняем список видеокарт
+            gpus = self.engine.get_gpus_info()
+            if gpus:
+                for gpu in gpus:
+                    item_text = f"GPU {gpu['index']}: {gpu['name']} ({gpu['memory_gb']} GB, CC {gpu['compute_capability']})"
+                    self.gpu_combo.addItem(item_text)
+                
+                # Окрашивание
+                model = self.gpu_combo.model()
+                for i, gpu in enumerate(gpus):
+                    color = "#2ecc71" if gpu["is_compatible"] else "#e74c3c"
+                    self.gpu_combo.setItemData(i, QBrush(QColor(color)), Qt.ItemDataRole.ForegroundRole)
+            else:
+                self.gpu_combo.addItem("Нет доступных GPU CUDA")
+                self.radio_gpu.setEnabled(False)
+                self.radio_cpu.setChecked(True)
+            
+            device_group_layout.addWidget(self.radio_gpu)
+            device_group_layout.addWidget(self.gpu_combo)
+            device_group_layout.addWidget(self.radio_cpu)
+            
+            # Активация комбобокса
+            self.radio_gpu.toggled.connect(self.gpu_combo.setEnabled)
+            self.gpu_combo.setEnabled(self.radio_gpu.isChecked())
+            
             self.radio_gpu.toggled.connect(self.save_settings)
             self.radio_cpu.toggled.connect(self.save_settings)
+            self.gpu_combo.currentIndexChanged.connect(self.save_settings)
                 
-            device_group_layout.addWidget(self.radio_gpu)
-            device_group_layout.addWidget(self.radio_cpu)
             tab2_layout.addWidget(device_group)
 
             # Группа 2: Режимы точности TotalSegmentator
@@ -2852,6 +2890,10 @@ if PYQT_AVAILABLE:
                 use_gpu = self.settings.value("use_gpu", True, type=bool)
                 self.radio_gpu.setChecked(use_gpu)
                 self.radio_cpu.setChecked(not use_gpu)
+                
+                selected_gpu = self.settings.value("selected_gpu", 0, type=int)
+                if hasattr(self, "gpu_combo") and self.gpu_combo.count() > selected_gpu:
+                    self.gpu_combo.setCurrentIndex(selected_gpu)
 
                 # Восстанавливаем галочки органов (без сигналов)
                 checked_organs = self.settings.value("checked_organs", None)
@@ -2906,6 +2948,8 @@ if PYQT_AVAILABLE:
             self.settings.setValue("color_preset", self.color_preset_combo.currentText())
             self.settings.setValue("play_sound", self.sound_check.isChecked())
             self.settings.setValue("use_gpu", self.radio_gpu.isChecked())
+            if hasattr(self, "gpu_combo"):
+                self.settings.setValue("selected_gpu", self.gpu_combo.currentIndex())
             
             checked_organs = []
             for i in range(self.organs_list.count()):

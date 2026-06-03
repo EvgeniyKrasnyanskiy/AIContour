@@ -47,6 +47,25 @@ def _get_server_use_gpu_setting() -> bool:
         return True
 
 
+def _get_server_selected_gpu_setting() -> int:
+    """
+    Безопасно считывает выбранный индекс видеокарты с сервера из файла config/server_settings.ini.
+    """
+    import configparser
+    try:
+        ini_path = Path(__file__).resolve().parent.parent / "config" / "server_settings.ini"
+        if not ini_path.exists():
+            return 0
+        
+        config = configparser.ConfigParser()
+        config.read(ini_path, encoding="utf-8")
+        
+        val = config.get("General", "selected_gpu", fallback="0")
+        return int(val.strip())
+    except Exception:
+        return 0
+
+
 class ServerJob:
     """Класс, описывающий структуру задачи сегментации КТ."""
     def __init__(self, job_id: str, client_name: str, options: dict):
@@ -450,7 +469,8 @@ class QueueManager:
 
             # 3. Запускаем вычислительный пайплайн
             final_use_gpu = _get_server_use_gpu_setting()
-            logger.info(f"[{job.job_id}] Режим расчета на сервере: {'GPU' if final_use_gpu else 'CPU'}")
+            selected_gpu_idx = _get_server_selected_gpu_setting()
+            logger.info(f"[{job.job_id}] Режим расчета на сервере: {'GPU' if final_use_gpu else 'CPU'} (Индекс GPU: {selected_gpu_idx})")
 
             added_count, elapsed_time = self.engine.run_pipeline(
                 dicom_dir_path=str(extracted_dicom_dir),
@@ -466,7 +486,8 @@ class QueueManager:
                 step_callback=step_cb,
                 progress_callback=prog_cb,
                 is_cancelled_cb=is_canc_cb,
-                register_process_cb=register_proc_cb
+                register_process_cb=register_proc_cb,
+                selected_gpu=selected_gpu_idx
             )
             
             # Проверяем отмену после окончания
