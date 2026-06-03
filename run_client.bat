@@ -13,7 +13,7 @@ if not exist "venv\Scripts\activate.bat" (
 call venv\Scripts\activate.bat
 
 echo [2/2] Starting AI Contour Client...
-python client_app.py
+venv\Scripts\python.exe client_app.py
 
 if %errorlevel% neq 0 (
     echo [WARNING] Client stopped with exit code %errorlevel%
