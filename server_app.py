@@ -1807,8 +1807,18 @@ if PYQT_AVAILABLE:
             selection_layout.addWidget(self.btn_delete_preset)
             tab1_layout.addLayout(selection_layout)
 
+            # Панель управления цветом контуров
+            self.color_preset_combo = NonScrollComboBox()
+            self.color_preset_combo.addItems([
+                "Классический",
+                "Цвета QUANTEC",
+                "Яркий неоновый"
+            ])
+            self.color_preset_combo.currentTextChanged.connect(self.on_color_preset_changed)
+            tab1_layout.addWidget(self.color_preset_combo)
+
             # Список OAR с чек-боксами
-            self.organs_header = QLabel("Органы для автооконтурирования: 0 из 0")
+            self.organs_header = QLabel("Структуры: 0 из 0")
             self.organs_header.setStyleSheet("font-weight: bold; color: #ffffff;")
             self.organs_list = QListWidget()
             self.organs_list.setItemDelegate(OrganIndentDelegate(self))
@@ -2001,22 +2011,7 @@ if PYQT_AVAILABLE:
             post_group_layout.addLayout(smoothing_param_layout)
             tab2_layout.addWidget(post_group)
 
-            # Группа 4: Кастомизация цветов
-            color_group = QGroupBox("Управление цветом контуров")
-            color_group_layout = QVBoxLayout(color_group)
-            
-            color_preset_label = QLabel("Предопределенный набор цветов:")
-            self.color_preset_combo = NonScrollComboBox()
-            self.color_preset_combo.addItems([
-                "Классический",
-                "Цвета QUANTEC",
-                "Яркий неоновый"
-            ])
-            self.color_preset_combo.currentTextChanged.connect(self.on_color_preset_changed)
-            
-            color_group_layout.addWidget(color_preset_label)
-            color_group_layout.addWidget(self.color_preset_combo)
-            tab2_layout.addWidget(color_group)
+
 
             # Группы 5 и 6: Настройки администратора ⚙️
             self.admin_settings_widget = QWidget()
@@ -4720,7 +4715,7 @@ if PYQT_AVAILABLE:
                     total += 1
                     if item.checkState() == Qt.CheckState.Checked:
                         checked += 1
-            self.organs_header.setText(f"Органы для автооконтурирования: {checked} из {total}")
+            self.organs_header.setText(f"Структуры: {checked} из {total}")
 
         def on_preset_changed(self, index: int):
             """Слот изменения выбранного пресета (вызывается при каждом выборе из списка)."""
