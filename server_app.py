@@ -1616,6 +1616,7 @@ if PYQT_AVAILABLE:
             # Инициализируем переменные состояния сервера
             self.server_is_paused = False
             self.is_toggling_pause = False
+            self.failed_server_status_checks = 0
             self.server_process = None
             self.start_server_process()
 
@@ -5899,6 +5900,7 @@ if PYQT_AVAILABLE:
                 return
                 
             if success:
+                self.failed_server_status_checks = 0
                 is_paused = data.get("is_paused", False)
                 info_list = data.get("jobs", [])
                 
@@ -6055,8 +6057,10 @@ if PYQT_AVAILABLE:
                                 self.last_server_log_index = 0
                             self.update_statistics_ui()
             else:
+                self.failed_server_status_checks = getattr(self, "failed_server_status_checks", 0) + 1
                 self.lbl_server_address.setText("Подключение к API серверу... (Запуск/Оффлайн)")
-                self.table_queue.setRowCount(0)
+                if self.failed_server_status_checks >= 5:
+                    self.table_queue.setRowCount(0)
 
         def create_table_item(self, text: str, centered: bool = False) -> QTableWidgetItem:
             item = QTableWidgetItem(text)

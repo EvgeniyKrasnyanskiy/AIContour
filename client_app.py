@@ -1363,6 +1363,7 @@ if PYQT_AVAILABLE:
             self.active_workers = []
             self.last_client_log_index = 0
             self._current_active_job_id = None
+            self.failed_status_checks = 0
             
             # Таймер для периодического обновления очереди задач и логов сетевой обработки
             self.server_ui_timer = QTimer(self)
@@ -5139,13 +5140,14 @@ if PYQT_AVAILABLE:
                 
             server_url = self.get_server_url()
             client_id = self.client_name_edit.text().strip()
-            self.status_worker = NetworkStatusWorker(server_url, timeout=0.8, client_id=client_id)
+            self.status_worker = NetworkStatusWorker(server_url, timeout=3.0, client_id=client_id)
             self.status_worker.status_received.connect(self.on_status_received)
             self.status_worker.error_occurred.connect(self.on_status_error)
             self.status_worker.start()
 
         def on_status_received(self, data: dict):
             """Слот обработки успешно полученного статуса сервера из фонового потока."""
+            self.failed_status_checks = 0
             try:
                 # Динамическая синхронизация лицензии суб-моделей
                 new_license = data.get("licenses", "")
@@ -5332,7 +5334,9 @@ if PYQT_AVAILABLE:
 
         def on_status_error(self, err_msg: str):
             """Слот обработки сетевой ошибки фонового воркера."""
-            self.table_queue.setRowCount(0)
+            self.failed_status_checks = getattr(self, "failed_status_checks", 0) + 1
+            if self.failed_status_checks >= 5:
+                self.table_queue.setRowCount(0)
             self.is_server_online = False
             if "403" in err_msg or "blocked" in err_msg.lower() or "forbidden" in err_msg.lower():
                 self.is_client_blocked = True
