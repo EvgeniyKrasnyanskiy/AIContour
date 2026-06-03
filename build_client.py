@@ -25,21 +25,23 @@ def print_banner(text):
 def check_and_install_dependencies():
     print_banner("1. Проверка и установка сборочных зависимостей")
     
-    # Определяем путь к pip в venv
-    venv_pip = Path("venv") / "Scripts" / "pip.exe"
-    if not venv_pip.exists():
-        # Если venv/Scripts/pip.exe не найден, используем системный python/pip
-        venv_pip = "pip"
-        print("[WARNING] venv/Scripts/pip.exe не найден! Будет использован глобальный pip.")
+    # Чтобы избежать ошибки "Fatal error in launcher: Unable to create process" из-за жестких путей к python.exe внутри pip.exe (например, после перемещения проекта),
+    # мы запускаем pip через интерпретатор python: "python.exe -m pip"
+    venv_python = Path("venv") / "Scripts" / "python.exe"
+    if not venv_python.exists():
+        venv_python = "python"
+        print("[WARNING] venv/Scripts/python.exe не найден! Будет использован глобальный python.")
+        pip_cmd = ["python", "-m", "pip"]
     else:
-        venv_pip = str(venv_pip)
-        print(f"[INFO] Обнаружен pip в виртуальном окружении: {venv_pip}")
+        venv_python = str(venv_python)
+        print(f"[INFO] Обнаружен python в виртуальном окружении: {venv_python}")
+        pip_cmd = [venv_python, "-m", "pip"]
         
     def install_with_fallbacks(package_name):
         """Пытается установить пакет через pip, поочередно пробуя различные зеркала PyPI в случае сбоя."""
         print(f"[INFO] Попытка установки {package_name} через официальный PyPI...")
         try:
-            subprocess.check_call([venv_pip, "install", package_name])
+            subprocess.check_call(pip_cmd + ["install", package_name])
             print(f"[OK] {package_name} успешно установлен.")
             return True
         except subprocess.CalledProcessError:
@@ -56,8 +58,8 @@ def check_and_install_dependencies():
             print(f"[INFO] Попытка установки {package_name} через зеркало {name} ({url})...")
             try:
                 host = url.split("//")[1].split("/")[0]
-                subprocess.check_call([
-                    venv_pip, "install", package_name, 
+                subprocess.check_call(pip_cmd + [
+                    "install", package_name, 
                     "--index-url", url, 
                     "--trusted-host", host
                 ])
