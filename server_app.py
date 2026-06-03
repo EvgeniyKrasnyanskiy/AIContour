@@ -1920,7 +1920,7 @@ if PYQT_AVAILABLE:
                     
                     if major < 6 or memory < 8.0:
                         color = "#e74c3c"  # Красный
-                    elif 8.0 <= memory <= 12.0:
+                    elif 8.0 <= memory < 11.5:
                         color = "#f1c40f"  # Желтый
                     else:
                         color = "#2ecc71"  # Зеленый
