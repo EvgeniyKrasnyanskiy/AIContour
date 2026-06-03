@@ -161,17 +161,30 @@ async def upload_job(
         job = queue_manager.get_job(job_id)
         pos = len(queue_manager.pending_queue)
         
-        # Асинхронно воспроизводим короткий звуковой сигнал на сервере при новой задаче
+        # Асинхронно воспроизводим короткий звуковой сигнал на сервере при новой задаче (если включены звуки)
         try:
-            import winsound
-            import threading
-            def play_alert():
+            import configparser
+            ini_path = Path(__file__).resolve().parent.parent / "config" / "server_settings.ini"
+            play_sound = True
+            if ini_path.exists():
                 try:
-                    winsound.Beep(880, 100)
-                    winsound.Beep(1109, 120)
+                    config = configparser.ConfigParser()
+                    config.read(ini_path, encoding="utf-8")
+                    val = config.get("General", "play_sound", fallback="true")
+                    play_sound = val.strip().lower() == "true"
                 except Exception:
                     pass
-            threading.Thread(target=play_alert, daemon=True).start()
+            
+            if play_sound:
+                import winsound
+                import threading
+                def play_alert():
+                    try:
+                        winsound.Beep(880, 100)
+                        winsound.Beep(1109, 120)
+                    except Exception:
+                        pass
+                threading.Thread(target=play_alert, daemon=True).start()
         except Exception:
             pass
 

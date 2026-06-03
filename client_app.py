@@ -1821,7 +1821,7 @@ if PYQT_AVAILABLE:
             tab2_layout.addWidget(conn_group)
 
             # Звук в конце
-            self.sound_check = QCheckBox("🔔 Звук при завершении автооконтуривания")
+            self.sound_check = QCheckBox("🔔 Воспроизводить звуки")
             self.sound_check.setChecked(True)
             tab2_layout.addWidget(self.sound_check)
             
@@ -5586,11 +5586,8 @@ if PYQT_AVAILABLE:
                         if item_str:
                             item_str.setText(format_rtstruct_count(len(self.rtstruct_files)))
                         
-                        # Если эта строка сейчас выделена в таблице, автоматически активируем галочку и отрисовываем контуры во вьюере
-                        selected = self.series_table.selectedItems()
-                        if selected and selected[0].row() == target_row:
-                            if hasattr(self, 'chk_show_structures') and self.chk_show_structures.isEnabled():
-                                self.chk_show_structures.setChecked(True)
+                        # Если эта строка сейчас выделена в таблице, автоматически активируем галочку и отрисовываем контуры во вьюере (отключено по требованию)
+                        pass
                     
                     # Парсинг количества структур (из текста сообщения)
                     count = 0
@@ -5746,10 +5743,8 @@ if PYQT_AVAILABLE:
                             if item_str:
                                 item_str.setText(format_rtstruct_count(len(self.rtstruct_files)))
                             
-                            # Автоматически активируем галочку и отрисовываем контуры во вьюере
-                            if hasattr(self, 'chk_show_structures') and self.chk_show_structures.isEnabled():
-                                self.chk_show_structures.setChecked(True)
-                                self.on_show_structures_changed()
+                            # Автоматически активируем галочку и отрисовываем контуры во вьюере (отключено по требованию)
+                            pass
                     
                     # Сбрасываем прогресс-бар до 0 через 5 секунд, чтобы не висел при просмотре снимков
                     QTimer.singleShot(5000, lambda: self.progress_bar.setValue(0))
