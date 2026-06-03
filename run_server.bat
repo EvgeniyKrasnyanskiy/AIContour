@@ -13,7 +13,7 @@ if not exist "venv\Scripts\activate.bat" (
 call venv\Scripts\activate.bat
 
 echo [2/2] Starting AI Contour Server...
-python server_app.py
+venv\Scripts\python.exe server_app.py
 
 if %errorlevel% neq 0 (
     echo [WARNING] Server stopped with exit code %errorlevel%
