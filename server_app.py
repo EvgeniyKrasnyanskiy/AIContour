@@ -1918,9 +1918,9 @@ if PYQT_AVAILABLE:
                     
                     memory = gpu.get("memory_gb", 0.0)
                     
-                    if major < 6 or memory < 8.0:
+                    if major < 6 or memory < 7.5:
                         color = "#e74c3c"  # Красный
-                    elif 8.0 <= memory < 11.5:
+                    elif 7.5 <= memory < 11.5:
                         color = "#f1c40f"  # Желтый
                     else:
                         color = "#2ecc71"  # Зеленый
