@@ -1699,6 +1699,7 @@ if PYQT_AVAILABLE:
             self.smoothing_check.setToolTip(
                 "Применяет Гауссову фильтрацию к 3D-маске, убирая «ступенчатость» срезов."
             )
+            self.smoothing_check.setChecked(True)
             self.smoothing_check.stateChanged.connect(self.on_smoothing_check_changed)
             
             smoothing_param_layout = QHBoxLayout()
@@ -2601,7 +2602,7 @@ if PYQT_AVAILABLE:
                 clean_blobs = self.settings.value("clean_blobs", True, type=bool)
                 self.clean_blobs_check.setChecked(clean_blobs)
 
-                smoothing = self.settings.value("smoothing", False, type=bool)
+                smoothing = self.settings.value("smoothing", True, type=bool)
                 self.smoothing_check.setChecked(smoothing)
                 self.smoothing_combo.setEnabled(smoothing)
 
