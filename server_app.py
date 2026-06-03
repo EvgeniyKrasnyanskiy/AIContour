@@ -5370,8 +5370,6 @@ if PYQT_AVAILABLE:
                                 if hasattr(self, 'chk_show_structures') and self.chk_show_structures.isEnabled():
                                     self.chk_show_structures.setChecked(True)
                                     self.on_show_structures_changed()
-                    
-                    QTimer.singleShot(100, lambda: QMessageBox.information(self, "Успех", f"Автоматическое оконтурирование для '{patient_name}' завершено успешно!"))
                     # Сбрасываем прогресс-бар до 0 через 5 секунд, если пациент все еще выделен
                     if is_selected:
                         QTimer.singleShot(5000, lambda: self.progress_bar.setValue(0) if self.is_worker_selected(worker) else None)
@@ -5392,14 +5390,12 @@ if PYQT_AVAILABLE:
                         
                         final_log = f"[WARN] [{patient_name}]: Расчет отменен пользователем."
                         self.log_edit.append(f"<br><span style='background-color: #d84315; color: white; font-weight: bold; padding: 4px;'>{final_log}</span><br>")
-                        QTimer.singleShot(100, lambda: QMessageBox.warning(self, "Предупреждение", f"Процесс оконтурирования для '{patient_name}' был прерван."))
                     else:
                         if is_selected:
                             self.status_step_label.setText("Текущий шаг: Ошибка!")
                         
                         final_log = f"[ERROR] [{patient_name}]: Сбой при сегментации: {message}"
                         self.log_edit.append(f"<br><span style='background-color: #c62828; color: white; font-weight: bold; padding: 4px;'>{final_log}</span><br>")
-                        QTimer.singleShot(100, lambda msg=message: QMessageBox.critical(self, "Критическая ошибка", f"Произошел сбой при сегментации '{patient_name}':\n{msg}"))
                     
                     # Сбрасываем прогресс-бар через 3 секунды в обоих случаях (отмена/ошибка)
                     if is_selected:
@@ -5412,7 +5408,6 @@ if PYQT_AVAILABLE:
                 import traceback
                 traceback.print_exc()
                 logger.error(f"Критическая ошибка в on_segmentation_finished_background: {e}")
-                QTimer.singleShot(100, lambda err=e: QMessageBox.critical(self, "Сбой GUI", f"Ошибка в on_segmentation_finished_background:\n{err}"))
 
         def on_tab_changed(self, index):
             if self.tab_widget.tabText(index) == "📊 Статистика":

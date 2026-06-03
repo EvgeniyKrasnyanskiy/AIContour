@@ -5619,16 +5619,13 @@ if PYQT_AVAILABLE:
                         else:
                             self.append_log("[Elekta WARNING]: Невозможно запустить экспорт. Сохраненный IP Monaco отсутствует.", "#ff6b6b")
                     
-                    QMessageBox.information(self, "Успех", f"Автоматическое оконтурирование для пациента {patient_name} завершено успешно!")
                 else:
                     if "отменена пользователем" in message.lower() or "отменен пользователем" in message.lower():
                         final_log = f"[INFO]: Задача пациента {patient_name} была отменена."
                         self.append_log(final_log, "#f39c12")
-                        QMessageBox.warning(self, "Предупреждение", f"Оконтурирование для пациента {patient_name} прервано.")
                     else:
                         final_log = f"[ERROR]: Сбой оконтурирования для пациента {patient_name}: {message}"
                         self.append_log(final_log, "#ff6b6b")
-                        QMessageBox.critical(self, "Ошибка", f"Произошел сбой при оконтурировании пациента {patient_name}:\n{message}")
 
             except Exception as e:
                 logger.error(f"Ошибка в on_segmentation_finished_background: {e}")
@@ -5738,7 +5735,6 @@ if PYQT_AVAILABLE:
                                 self.chk_show_structures.setChecked(True)
                                 self.on_show_structures_changed()
                     
-                    QTimer.singleShot(100, lambda: QMessageBox.information(self, "Успех", "Автоматическое оконтурирование завершено успешно!"))
                     # Сбрасываем прогресс-бар до 0 через 5 секунд, чтобы не висел при просмотре снимков
                     QTimer.singleShot(5000, lambda: self.progress_bar.setValue(0))
                 else:
@@ -5746,17 +5742,14 @@ if PYQT_AVAILABLE:
                     if "отменена пользователем" in message.lower() or "отменен пользователем" in message.lower():
                         self.status_step_label.setText("Текущий шаг: Расчет отменен!")
                         self.status_step_label.setStyleSheet("color: #e74c3c; font-weight: bold;")
-                        QTimer.singleShot(100, lambda: QMessageBox.warning(self, "Предупреждение", "Процесс оконтурирования был прерван."))
                     else:
                         self.status_step_label.setText("Текущий шаг: Ошибка!")
-                        QTimer.singleShot(100, lambda msg=message: QMessageBox.critical(self, "Критическая ошибка", f"Произошел сбой при сегментации:\n{msg}"))
                     # Сбрасываем прогресс-бар через 3 секунды в обоих случаях (отмена/ошибка)
                     QTimer.singleShot(3000, lambda: self.progress_bar.setValue(0))
             except Exception as e:
                 import traceback
                 traceback.print_exc()
                 logger.error(f"Критическая ошибка в on_segmentation_finished: {e}")
-                QTimer.singleShot(100, lambda err=e: QMessageBox.critical(self, "Сбой GUI", f"Ошибка в on_segmentation_finished:\n{err}"))
 
         def on_step_changed(self, step_text: str):
             self.current_step_base_text = step_text
