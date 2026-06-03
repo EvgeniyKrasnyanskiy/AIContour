@@ -80,7 +80,8 @@ DEFAULT_PRESETS_DATA = {
         ],
         "Брюшная полость (Abdomen)": [
             "spleen", "kidney_right", "kidney_left", "gallbladder", "liver", "stomach", "pancreas", "duodenum",
-            "adrenal_gland_left", "adrenal_gland_right", "portal_vein_and_splenic_vein", "small_bowel", "colon"
+            "adrenal_gland_left", "adrenal_gland_right", "portal_vein_and_splenic_vein", "small_bowel", "colon",
+            "inferior_vena_cava"
         ],
         "Малый таз (Pelvis)": [
             "urinary_bladder", "prostate", "sacrum", "hip_left", "hip_right", "femur_left", "femur_right",
