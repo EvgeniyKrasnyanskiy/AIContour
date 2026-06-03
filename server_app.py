@@ -2299,7 +2299,7 @@ if PYQT_AVAILABLE:
             self.series_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             self.series_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
             self.series_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            self.series_table.customContextMenuRequested.connect(self.show_context_menu)
+            self.series_table.customContextMenuRequested.connect(self.show_series_context_menu)
             self.series_table.cellDoubleClicked.connect(self.on_table_double_clicked)
             self.series_table.setStyleSheet("""
                 QTableWidget {
@@ -2504,7 +2504,7 @@ if PYQT_AVAILABLE:
             self.table_queue.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
             self.table_queue.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             self.table_queue.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            self.table_queue.customContextMenuRequested.connect(self.show_context_menu)
+            self.table_queue.customContextMenuRequested.connect(self.show_queue_context_menu)
 
             queue_layout.addWidget(self.table_queue, 1)
             
@@ -3357,16 +3357,19 @@ if PYQT_AVAILABLE:
                 except Exception as e:
                     logger.error(f"Не удалось открыть папку: {e}")
 
-        def show_context_menu(self, position):
+        def show_series_context_menu(self, position):
             selected = self.series_table.selectedItems()
             if not selected:
                 return
             
             row = selected[0].row()
+            patient_name = self.series_table.item(row, 0).text()
+            patient_id = self.series_table.item(row, 1).text()
             path = self.series_table.item(row, 6).text()
             
             menu = QMenu(self.series_table)
-            delete_action = menu.addAction("Удалить")
+            delete_action = menu.addAction("Удалить пациента")
+            delete_structs_action = menu.addAction("Удалить файл структур")
             
             action = menu.exec(self.series_table.viewport().mapToGlobal(position))
             if action == delete_action:
@@ -3374,7 +3377,7 @@ if PYQT_AVAILABLE:
                 reply = QMessageBox.question(
                     self,
                     "Удаление исследования",
-                    "Вы уверены, что хотите безвозвратно удалить папку этого исследования с диска?\n\n" + path,
+                    f"Вы уверены, что хотите безвозвратно удалить папку этого исследования с диска?\n\n{path}",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.No
                 )
@@ -3387,6 +3390,76 @@ if PYQT_AVAILABLE:
                     except Exception as e:
                         QMessageBox.critical(self, "Ошибка удаления", f"Не удалось удалить папку:\n{e}")
                         logger.error(f"Ошибка удаления: {e}")
+                self.scan_timer.start(15000)
+                
+            elif action == delete_structs_action:
+                self.scan_timer.stop()
+                try:
+                    import glob
+                    import pydicom
+                    
+                    rtstructs = []
+                    if path and os.path.isdir(path):
+                        for f in glob.glob(os.path.join(path, "*.dcm")):
+                            try:
+                                ds = pydicom.dcmread(f, stop_before_pixels=True)
+                                if str(getattr(ds, 'Modality', '')) == 'RTSTRUCT':
+                                    rtstructs.append(f)
+                            except Exception:
+                                pass
+                        rtstructs.sort(key=os.path.getmtime)
+                    
+                    if not rtstructs:
+                        QMessageBox.information(self, "Удаление структур", "У выбранного пациента нет файлов структур.")
+                        self.scan_timer.start(15000)
+                        return
+                        
+                    if len(rtstructs) == 1:
+                        reply = QMessageBox.question(
+                            self,
+                            "Удаление файла структур",
+                            f"Вы действительно хотите удалить файл структур пациента {patient_name} ({patient_id})?",
+                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                            QMessageBox.StandardButton.No
+                        )
+                        if reply == QMessageBox.StandardButton.Yes:
+                            os.remove(rtstructs[0])
+                            logger.info(f"Удален файл структур: {rtstructs[0]}")
+                            root_path = self.input_edit.text().strip()
+                            if root_path and os.path.isdir(root_path):
+                                self.start_dicom_scan(root_path, is_manual=False)
+                    else:
+                        msg_box = QMessageBox(self)
+                        msg_box.setWindowTitle("Уточните действие")
+                        msg_box.setText("У пациента обнаружено несколько файлов структур. Уточните действие:")
+                        msg_box.setIcon(QMessageBox.Icon.Question)
+                        
+                        btn_all = msg_box.addButton("удалить все файлы структур пациента", QMessageBox.ButtonRole.ActionRole)
+                        btn_last = msg_box.addButton("удалить последний файл структур", QMessageBox.ButtonRole.ActionRole)
+                        btn_except_last = msg_box.addButton("удалить все кроме последнего файла структур", QMessageBox.ButtonRole.ActionRole)
+                        btn_cancel = msg_box.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+                        
+                        msg_box.exec()
+                        clicked_btn = msg_box.clickedButton()
+                        
+                        files_to_delete = []
+                        if clicked_btn == btn_all:
+                            files_to_delete = rtstructs
+                        elif clicked_btn == btn_last:
+                            files_to_delete = [rtstructs[-1]]
+                        elif clicked_btn == btn_except_last:
+                            files_to_delete = rtstructs[:-1]
+                            
+                        if files_to_delete:
+                            for f in files_to_delete:
+                                os.remove(f)
+                                logger.info(f"Удален файл структур: {f}")
+                            root_path = self.input_edit.text().strip()
+                            if root_path and os.path.isdir(root_path):
+                                self.start_dicom_scan(root_path, is_manual=False)
+                except Exception as e:
+                    QMessageBox.critical(self, "Ошибка удаления", f"Не удалось удалить файлы структур:\n{e}")
+                    logger.error(f"Ошибка удаления структур: {e}")
                 self.scan_timer.start(15000)
 
         def update_viewer_with_dicom(self, folder_path: str):
@@ -6068,7 +6141,7 @@ if PYQT_AVAILABLE:
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             return item
 
-        def show_context_menu(self, pos):
+        def show_queue_context_menu(self, pos):
             """Отображает контекстное меню для управления задачами в очереди."""
             row = self.table_queue.currentRow()
             if row < 0:
