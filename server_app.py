@@ -5495,8 +5495,8 @@ if PYQT_AVAILABLE:
             layout.addWidget(table_lbl)
             
             self.stats_table = QTableWidget()
-            self.stats_table.setColumnCount(5)
-            self.stats_table.setHorizontalHeaderLabels(["Время", "Пресет", "Режим", "Длительность", "Статус"])
+            self.stats_table.setColumnCount(6)
+            self.stats_table.setHorizontalHeaderLabels(["Время", "Пресет", "Режим", "Устройство", "Длительность", "Статус"])
             self.stats_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
             self.stats_table.setStyleSheet("""
                 QTableWidget {
@@ -5619,6 +5619,10 @@ if PYQT_AVAILABLE:
                     precision_item = QTableWidgetItem(str(run.get("precision", "")))
                     precision_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     
+                    device = run.get("device", "GPU")
+                    device_item = QTableWidgetItem(str(device))
+                    device_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    
                     dur = run.get("elapsed_seconds", 0.0)
                     dur_item = QTableWidgetItem(f"{dur} сек")
                     dur_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -5626,8 +5630,9 @@ if PYQT_AVAILABLE:
                     self.stats_table.setItem(row, 0, time_item)
                     self.stats_table.setItem(row, 1, preset_item)
                     self.stats_table.setItem(row, 2, precision_item)
-                    self.stats_table.setItem(row, 3, dur_item)
-                    self.stats_table.setItem(row, 4, status_item)
+                    self.stats_table.setItem(row, 3, device_item)
+                    self.stats_table.setItem(row, 4, dur_item)
+                    self.stats_table.setItem(row, 5, status_item)
                 
                 self.stats_organs_list.clear()
                 org_stats = stats.get("organ_stats", {})

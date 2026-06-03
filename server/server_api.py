@@ -211,6 +211,7 @@ def get_job_status(job_id: str):
         "queue_position": pos,
         "elapsed_seconds": round(job.elapsed_seconds, 1),
         "eta_seconds": round(job.eta_seconds, 1),
+        "device": getattr(job, "device", "GPU"),
         "error_message": job.error_message,
         "is_server_paused": queue_manager.is_paused,
         "logs": job.logs

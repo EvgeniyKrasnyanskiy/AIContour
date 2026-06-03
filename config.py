@@ -386,7 +386,8 @@ class StatisticsManager:
         elapsed_seconds: float,
         organs_contoured: List[str],
         preset_name: str,
-        precision_mode: str
+        precision_mode: str,
+        device: str = "GPU"
     ) -> None:
         """Записывает новый запуск автооконтурирования (потокобезопасно)."""
         with self._lock:
@@ -438,6 +439,7 @@ class StatisticsManager:
                 "status": status,
                 "preset": display_preset,
                 "precision": display_precision,
+                "device": device,
                 "elapsed_seconds": round(elapsed_seconds, 1),
                 "organs_count": len(organs_contoured) if status == "success" else 0
             }

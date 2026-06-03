@@ -72,6 +72,7 @@ class ServerJob:
         self.job_id = job_id
         self.client_name = client_name
         self.options = options
+        self.device = "GPU"
         
         # Метаданные пациента (заполняются после считывания DICOM)
         self.patient_name = "Считывание..."
@@ -470,7 +471,8 @@ class QueueManager:
             # 3. Запускаем вычислительный пайплайн
             final_use_gpu = _get_server_use_gpu_setting()
             selected_gpu_idx = _get_server_selected_gpu_setting()
-            logger.info(f"[{job.job_id}] Режим расчета на сервере: {'GPU' if final_use_gpu else 'CPU'} (Индекс GPU: {selected_gpu_idx})")
+            job.device = "GPU" if final_use_gpu else "CPU"
+            logger.info(f"[{job.job_id}] Режим расчета на сервере: {job.device} (Индекс GPU: {selected_gpu_idx})")
 
             added_count, elapsed_time = self.engine.run_pipeline(
                 dicom_dir_path=str(extracted_dicom_dir),
@@ -519,7 +521,8 @@ class QueueManager:
                     elapsed_seconds=elapsed_time,
                     organs_contoured=job.options.get("selected_organs") or [],
                     preset_name=job.options.get("preset_name", "Пользовательский"),
-                    precision_mode=job.options.get("precision_mode", "normal")
+                    precision_mode=job.options.get("precision_mode", "normal"),
+                    device=job.device
                 )
             except Exception as se:
                 logger.warning(f"Не удалось записать статистику сервера: {se}")
@@ -547,7 +550,8 @@ class QueueManager:
                         elapsed_seconds=time.time() - (job.started_at or time.time()),
                         organs_contoured=[],
                         preset_name=job.options.get("preset_name", "Ошибка"),
-                        precision_mode=job.options.get("precision_mode", "normal")
+                        precision_mode=job.options.get("precision_mode", "normal"),
+                        device=job.device
                     )
                 except Exception as se:
                     logger.warning(f"Не удалось записать статистику отмены/сбоя сервера: {se}")

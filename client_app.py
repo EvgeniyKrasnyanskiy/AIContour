@@ -526,6 +526,7 @@ if PYQT_AVAILABLE:
             
             temp_zip = None
             job_id = None
+            self.last_device = "GPU"
             try:
                 self.step_signal.emit("Шаг 1 из 5: Архивирование КТ снимков...")
                 self.progress_signal.emit(5)
@@ -592,6 +593,7 @@ if PYQT_AVAILABLE:
                             
                         status_data = status_res.json()
                         status = status_data.get("status")
+                        self.last_device = status_data.get("device", "GPU")
                         progress = status_data.get("progress", 0)
                         step = status_data.get("current_step", "")
                         elapsed = status_data.get("elapsed_seconds", 0.0)
@@ -5517,6 +5519,7 @@ if PYQT_AVAILABLE:
                 organs = worker.selected_organs if worker else []
                 preset = self.preset_combo.currentText()
                 precision = self.precision_combo.currentText()
+                device = getattr(worker, "last_device", "GPU")
 
                 if success:
                     self.stats_manager.record_run(
@@ -5524,7 +5527,8 @@ if PYQT_AVAILABLE:
                         elapsed_seconds=elapsed,
                         organs_contoured=organs,
                         preset_name=preset,
-                        precision_mode=precision
+                        precision_mode=precision,
+                        device=device
                     )
                 else:
                     is_cancelled = False
@@ -5539,7 +5543,8 @@ if PYQT_AVAILABLE:
                         elapsed_seconds=elapsed,
                         organs_contoured=[],
                         preset_name=preset,
-                        precision_mode=precision
+                        precision_mode=precision,
+                        device=device
                     )
                 
                 # Обновляем интерфейс статистики
@@ -5652,6 +5657,7 @@ if PYQT_AVAILABLE:
                 organs = self.worker.selected_organs if self.worker else []
                 preset = self.preset_combo.currentText()
                 precision = self.precision_combo.currentText()
+                device = "GPU" if self.radio_gpu.isChecked() else "CPU"
 
                 if success:
                     self.stats_manager.record_run(
@@ -5659,7 +5665,8 @@ if PYQT_AVAILABLE:
                         elapsed_seconds=elapsed,
                         organs_contoured=organs,
                         preset_name=preset,
-                        precision_mode=precision
+                        precision_mode=precision,
+                        device=device
                     )
                 else:
                     is_cancelled = False
@@ -5674,7 +5681,8 @@ if PYQT_AVAILABLE:
                         elapsed_seconds=elapsed,
                         organs_contoured=[],
                         preset_name=preset,
-                        precision_mode=precision
+                        precision_mode=precision,
+                        device=device
                     )
                 
                 # Обновляем интерфейс статистики
@@ -5858,8 +5866,8 @@ if PYQT_AVAILABLE:
             layout.addWidget(table_lbl)
             
             self.stats_table = QTableWidget()
-            self.stats_table.setColumnCount(5)
-            self.stats_table.setHorizontalHeaderLabels(["Время", "Пресет", "Режим", "Длительность", "Статус"])
+            self.stats_table.setColumnCount(6)
+            self.stats_table.setHorizontalHeaderLabels(["Время", "Пресет", "Режим", "Устройство", "Длительность", "Статус"])
             self.stats_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
             self.stats_table.setStyleSheet("""
                 QTableWidget {
@@ -5982,6 +5990,10 @@ if PYQT_AVAILABLE:
                     precision_item = QTableWidgetItem(str(run.get("precision", "")))
                     precision_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     
+                    device = run.get("device", "GPU")
+                    device_item = QTableWidgetItem(str(device))
+                    device_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    
                     dur = run.get("elapsed_seconds", 0.0)
                     dur_item = QTableWidgetItem(f"{dur} сек")
                     dur_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -5989,8 +6001,9 @@ if PYQT_AVAILABLE:
                     self.stats_table.setItem(row, 0, time_item)
                     self.stats_table.setItem(row, 1, preset_item)
                     self.stats_table.setItem(row, 2, precision_item)
-                    self.stats_table.setItem(row, 3, dur_item)
-                    self.stats_table.setItem(row, 4, status_item)
+                    self.stats_table.setItem(row, 3, device_item)
+                    self.stats_table.setItem(row, 4, dur_item)
+                    self.stats_table.setItem(row, 5, status_item)
                 
                 self.stats_organs_list.clear()
                 org_stats = stats.get("organ_stats", {})
