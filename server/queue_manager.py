@@ -26,6 +26,46 @@ logger = logging.getLogger("QueueManager")
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from contour_engine import ContourEngine
 
+
+def _get_server_use_gpu_setting() -> bool:
+    """
+    Безопасно считывает локальную настройку использования GPU с сервера из файла config/server_settings.ini.
+    """
+    import configparser
+    try:
+        ini_path = Path(__file__).resolve().parent.parent / "config" / "server_settings.ini"
+        if not ini_path.exists():
+            return True
+        
+        config = configparser.ConfigParser()
+        config.read(ini_path, encoding="utf-8")
+        
+        # QSettings по умолчанию сохраняет в секцию [General]
+        val = config.get("General", "use_gpu", fallback="true")
+        return val.strip().lower() == "true"
+    except Exception:
+        return True
+
+
+def _get_server_selected_gpu_setting() -> int:
+    """
+    Безопасно считывает выбранный индекс видеокарты с сервера из файла config/server_settings.ini.
+    """
+    import configparser
+    try:
+        ini_path = Path(__file__).resolve().parent.parent / "config" / "server_settings.ini"
+        if not ini_path.exists():
+            return 0
+        
+        config = configparser.ConfigParser()
+        config.read(ini_path, encoding="utf-8")
+        
+        val = config.get("General", "selected_gpu", fallback="0")
+        return int(val.strip())
+    except Exception:
+        return 0
+
+
 class ServerJob:
     """Класс, описывающий структуру задачи сегментации КТ."""
     def __init__(self, job_id: str, client_name: str, options: dict):
@@ -428,6 +468,10 @@ class QueueManager:
                     job.active_process = p
 
             # 3. Запускаем вычислительный пайплайн
+            final_use_gpu = _get_server_use_gpu_setting()
+            selected_gpu_idx = _get_server_selected_gpu_setting()
+            logger.info(f"[{job.job_id}] Режим расчета на сервере: {'GPU' if final_use_gpu else 'CPU'} (Индекс GPU: {selected_gpu_idx})")
+
             added_count, elapsed_time = self.engine.run_pipeline(
                 dicom_dir_path=str(extracted_dicom_dir),
                 output_dir_path=str(output_workspace_dir),
@@ -436,13 +480,14 @@ class QueueManager:
                 selected_organs=job.options.get("selected_organs"),
                 merge_mode=job.options.get("merge_mode", "merge"),
                 existing_rtstruct_path=self._find_existing_rtstruct(extracted_dicom_dir),
-                use_gpu=job.options.get("use_gpu", False),
+                use_gpu=final_use_gpu,
                 remove_blobs=job.options.get("remove_blobs", False),
                 smoothing_sigma=job.options.get("smoothing_sigma", 0.0),
                 step_callback=step_cb,
                 progress_callback=prog_cb,
                 is_cancelled_cb=is_canc_cb,
-                register_process_cb=register_proc_cb
+                register_process_cb=register_proc_cb,
+                selected_gpu=selected_gpu_idx
             )
             
             # Проверяем отмену после окончания

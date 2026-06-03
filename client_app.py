@@ -31,6 +31,7 @@ from typing import Dict, List, Optional
 import pyqtgraph as pg
 import numpy as np
 import pydicom
+import elekta_mod
 
 # Импорт PyQt6
 try:
@@ -39,7 +40,7 @@ try:
         QLabel, QLineEdit, QPushButton, QComboBox, QListWidget, QListWidgetItem,
         QRadioButton, QButtonGroup, QTextEdit, QProgressBar, QFileDialog,
         QMessageBox, QFrame, QSplitter, QCheckBox, QDialog, QTextBrowser,
-        QTabWidget, QColorDialog, QGroupBox,
+        QTabWidget, QColorDialog, QGroupBox, QGridLayout,
         QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QMenu,
         QProgressDialog, QScrollArea, QStyledItemDelegate, QStyleOptionViewItem
     )
@@ -310,6 +311,8 @@ if PYQT_AVAILABLE:
                     color = "#ff6b6b"
                 elif record.levelno == logging.WARNING:
                     color = "#f1c40f"
+                elif record.name == "ElektaMod":
+                    color = "#00ffd0"
                 else:
                     color = "#a0a0a2"
                 self.signaler.log_signal.emit(msg, color)
@@ -816,12 +819,33 @@ if PYQT_AVAILABLE:
             QApplication.restoreOverrideCursor()
             
             if not valid:
-                QMessageBox.critical(
+                reply = QMessageBox.question(
                     self,
-                    "Недействительная лицензия ❌",
-                    "Введенный лицензионный ключ недействителен.\n"
-                    "Проверка на сервере TotalSegmentator отклонена. Пожалуйста, убедитесь в правильности ключа."
+                    "Лицензия отклонена или нет сети ❌",
+                    "Проверка на сервере TotalSegmentator не удалась.\n"
+                    "Это может быть вызвано отсутствием интернета, блокировкой сети или истекшим сроком действия ключа.\n\n"
+                    "Вы действительно хотите сохранить этот ключ локально без онлайн-проверки?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
                 )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.engine.licenses = key
+                    self._write_license_to_totalseg_config(key)
+                    
+                    server_url = self.get_server_url()
+                    if server_url:
+                        client_id = self.client_name_edit.text().strip()
+                        headers = {"X-Client-ID": client_id}
+                        try:
+                            import requests
+                            requests.post(f"{server_url}/api/config/licenses", json={"license_key": key}, headers=headers, timeout=5)
+                            self.sync_config_from_server()
+                        except Exception as se:
+                            logger.warning(f"Не удалось отправить лицензию на сервер: {se}")
+                            
+                    self.edit_key.clear()
+                    self.update_status_display()
+                    QMessageBox.information(self, "Успех", "Лицензия сохранена локально.")
                 return
                 
             # Сохранение валидной лицензии
@@ -1329,7 +1353,8 @@ if PYQT_AVAILABLE:
             self.is_updating_presets = False
             self.collapsed_groups = {"Остальное": True, "Отделы головного мозга (Brain Structures)": True}
             self.worker = None
-            self.settings = QSettings("AIContourCorp", "AIContour")
+            os.makedirs("config", exist_ok=True)
+            self.settings = QSettings("config/client_settings.ini", QSettings.Format.IniFormat)
 
             # Инициализация вычислительного движка
             self.engine = ContourEngine()
@@ -1359,6 +1384,7 @@ if PYQT_AVAILABLE:
             self.active_workers = []
             self.last_client_log_index = 0
             self._current_active_job_id = None
+            self.failed_status_checks = 0
             
             # Таймер для периодического обновления очереди задач и логов сетевой обработки
             self.server_ui_timer = QTimer(self)
@@ -1399,7 +1425,7 @@ if PYQT_AVAILABLE:
             # --- ЛЕВАЯ КОЛОНКА (Вкладки настроек) ---
             self.left_card = QFrame()
             self.left_card.setObjectName("card")
-            self.left_card.setMinimumWidth(420)
+            self.left_card.setMinimumWidth(490)
             left_layout = QVBoxLayout(self.left_card)
             left_layout.setContentsMargins(5, 5, 5, 5)
 
@@ -1501,6 +1527,113 @@ if PYQT_AVAILABLE:
             input_box.addWidget(self.input_edit)
             input_box.addWidget(self.btn_input)
             input_group_layout.addLayout(input_box)
+            
+            # Чекбокс Elekta mod
+            self.elekta_mode_check = QCheckBox("Режим Elekta mod (DICOM-приемник)")
+            self.elekta_mode_check.setStyleSheet("font-weight: bold; color: #00ffd0; margin-top: 5px;")
+            self.elekta_mode_check.stateChanged.connect(self.on_elekta_mode_changed)
+            input_group_layout.addWidget(self.elekta_mode_check)
+            
+            # Панель настроек Elekta mod (компактный вид: 2 строки)
+            self.elekta_settings_widget = QWidget()
+            elekta_settings_layout = QGridLayout(self.elekta_settings_widget)
+            elekta_settings_layout.setContentsMargins(10, 5, 5, 5)
+            elekta_settings_layout.setSpacing(6)
+            
+            lbl_local_desc = QLabel("Local:")
+            lbl_local_desc.setStyleSheet("color: #a0a0a0; font-weight: bold;")
+            
+            lbl_local_aet_lbl = QLabel("AET")
+            lbl_local_aet_lbl.setStyleSheet("color: #a0a0a0;")
+            
+            self.elekta_local_aet_edit = QLineEdit("AIC_SCP")
+            self.elekta_local_aet_edit.setPlaceholderText("AIC_SCP")
+            self.elekta_local_aet_edit.setFixedWidth(200)
+            
+            lbl_local_port_desc = QLabel("Port")
+            lbl_local_port_desc.setStyleSheet("color: #a0a0a0;")
+            
+            self.elekta_local_port_edit = QLineEdit("10404")
+            self.elekta_local_port_edit.setPlaceholderText("10404")
+            self.elekta_local_port_edit.setFixedWidth(70)
+            
+            lbl_monaco_desc = QLabel("Remote:")
+            lbl_monaco_desc.setStyleSheet("color: #a0a0a0; font-weight: bold;")
+            
+            lbl_monaco_aet_lbl = QLabel("AET")
+            lbl_monaco_aet_lbl.setStyleSheet("color: #a0a0a0;")
+            
+            self.elekta_monaco_aet_edit = QLineEdit("MONACO")
+            self.elekta_monaco_aet_edit.setPlaceholderText("MONACO")
+            self.elekta_monaco_aet_edit.setFixedWidth(200)
+            
+            lbl_monaco_port_desc = QLabel("Port")
+            lbl_monaco_port_desc.setStyleSheet("color: #a0a0a0;")
+            
+            self.elekta_monaco_port_edit = QLineEdit("104")
+            self.elekta_monaco_port_edit.setPlaceholderText("104")
+            self.elekta_monaco_port_edit.setFixedWidth(70)
+            
+            # Размещаем в сетку
+            # Строка 0: Приемник (Local)
+            elekta_settings_layout.addWidget(lbl_local_desc, 0, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            
+            hbox_local = QHBoxLayout()
+            hbox_local.setContentsMargins(0, 0, 0, 0)
+            hbox_local.setSpacing(6)
+            hbox_local.addWidget(lbl_local_aet_lbl)
+            hbox_local.addWidget(self.elekta_local_aet_edit)
+            hbox_local.addWidget(lbl_local_port_desc)
+            hbox_local.addWidget(self.elekta_local_port_edit)
+            hbox_local.addStretch()
+            elekta_settings_layout.addLayout(hbox_local, 0, 1)
+            
+            # Строка 1: Monaco (Remote)
+            elekta_settings_layout.addWidget(lbl_monaco_desc, 1, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            
+            hbox_monaco = QHBoxLayout()
+            hbox_monaco.setContentsMargins(0, 0, 0, 0)
+            hbox_monaco.setSpacing(6)
+            hbox_monaco.addWidget(lbl_monaco_aet_lbl)
+            hbox_monaco.addWidget(self.elekta_monaco_aet_edit)
+            hbox_monaco.addWidget(lbl_monaco_port_desc)
+            hbox_monaco.addWidget(self.elekta_monaco_port_edit)
+            elekta_settings_layout.addLayout(hbox_monaco, 1, 1)
+            
+            # Строка 2: Monaco IP и Кнопка проверки связи
+            lbl_monaco_ip_desc = QLabel("IP Монако:")
+            lbl_monaco_ip_desc.setStyleSheet("color: #a0a0a0; font-weight: bold;")
+            
+            self.elekta_monaco_ip_edit = QLineEdit("127.0.0.1")
+            self.elekta_monaco_ip_edit.setPlaceholderText("127.0.0.1")
+            self.elekta_monaco_ip_edit.setFixedWidth(120)
+            
+            self.btn_ping_monaco = QPushButton("⚡ Проверить связь")
+            self.btn_ping_monaco.setObjectName("btnAction")
+            self.btn_ping_monaco.setMinimumHeight(24)
+            self.btn_ping_monaco.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_ping_monaco.clicked.connect(self.ping_monaco_connection)
+            
+            hbox_ping = QHBoxLayout()
+            hbox_ping.setContentsMargins(0, 0, 0, 0)
+            hbox_ping.setSpacing(6)
+            hbox_ping.addWidget(self.elekta_monaco_ip_edit)
+            hbox_ping.addWidget(self.btn_ping_monaco)
+            hbox_ping.addStretch()
+            
+            elekta_settings_layout.addWidget(lbl_monaco_ip_desc, 2, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            elekta_settings_layout.addLayout(hbox_ping, 2, 1)
+            
+            self.elekta_settings_widget.setVisible(False)
+            input_group_layout.addWidget(self.elekta_settings_widget)
+            
+            # Автосохранение настроек Elekta mod при ручном изменении
+            self.elekta_mode_check.stateChanged.connect(self.save_settings)
+            self.elekta_local_aet_edit.textChanged.connect(self.save_settings)
+            self.elekta_local_port_edit.textChanged.connect(self.save_settings)
+            self.elekta_monaco_aet_edit.textChanged.connect(self.save_settings)
+            self.elekta_monaco_port_edit.textChanged.connect(self.save_settings)
+            
             tab2_layout.addWidget(input_group)
             
             # Группа: Действия с файлами структур (перенесено из Tab 1)
@@ -1587,6 +1720,7 @@ if PYQT_AVAILABLE:
             self.smoothing_check.setToolTip(
                 "Применяет Гауссову фильтрацию к 3D-маске, убирая «ступенчатость» срезов."
             )
+            self.smoothing_check.setChecked(True)
             self.smoothing_check.stateChanged.connect(self.on_smoothing_check_changed)
             
             smoothing_param_layout = QHBoxLayout()
@@ -1772,7 +1906,7 @@ if PYQT_AVAILABLE:
 </style>
 </head>
 <body>
-    <h1>Справка по работе с AI Contour (Краснодар)📖</h1>
+    <h1>Справка по работе с AI Contour📖</h1>
 
     <p><b>AI Contour</b> — интеллектуальное ПО для автоматического сегментирования органов риска (OAR) на КТ-снимках DICOM с использованием нейросети <b>TotalSegmentator</b>.</p>
 
@@ -1860,7 +1994,7 @@ if PYQT_AVAILABLE:
             self.series_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             self.series_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
             self.series_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            self.series_table.customContextMenuRequested.connect(self.show_context_menu)
+            self.series_table.customContextMenuRequested.connect(self.show_series_context_menu)
             self.series_table.cellDoubleClicked.connect(self.on_table_double_clicked)
             self.series_table.setStyleSheet("""
                 QTableWidget {
@@ -2064,7 +2198,7 @@ if PYQT_AVAILABLE:
             self.table_queue.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
             self.table_queue.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             self.table_queue.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            self.table_queue.customContextMenuRequested.connect(self.show_context_menu)
+            self.table_queue.customContextMenuRequested.connect(self.show_queue_context_menu)
 
             queue_layout.addWidget(self.table_queue, 1)
             
@@ -2116,7 +2250,7 @@ if PYQT_AVAILABLE:
             self.smoothing_combo.currentIndexChanged.connect(self.save_settings)
             self.color_preset_combo.currentIndexChanged.connect(self.save_settings)
             
-            self.splitter.setSizes([430, 490])
+            self.splitter.setSizes([490, 430])
 
             # Скрываем статус-бар, так как индикатор перенесен во вкладки
             self.statusBar().setVisible(False)
@@ -2125,7 +2259,7 @@ if PYQT_AVAILABLE:
             """Динамическое ограничение максимальной ширины левой панели до 50% ширины окна."""
             super().resizeEvent(event)
             if hasattr(self, 'left_card'):
-                max_w = max(420, int(self.width() * 0.5))
+                max_w = max(490, int(self.width() * 0.5))
                 self.left_card.setMaximumWidth(max_w)
 
         def update_license_status_label(self):
@@ -2144,6 +2278,69 @@ if PYQT_AVAILABLE:
             """Открывает окно управления моделями ИИ."""
             dialog = ModelsDialog(self, self.engine)
             dialog.exec()
+
+        def ping_monaco_connection(self):
+            """Выполняет экспресс-проверку DICOM C-ECHO соединения со станцией Monaco."""
+            ip = self.elekta_monaco_ip_edit.text().strip()
+            port_str = self.elekta_monaco_port_edit.text().strip()
+            aet = self.elekta_monaco_aet_edit.text().strip()
+            
+            if not ip:
+                QMessageBox.warning(self, "Предупреждение", "Пожалуйста, введите IP-адрес станции Monaco.")
+                return
+                
+            if not port_str.isdigit():
+                QMessageBox.warning(self, "Предупреждение", "Порт Monaco должен быть числом.")
+                return
+                
+            port = int(port_str)
+            
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            self.btn_ping_monaco.setEnabled(False)
+            
+            # Фоновый поток для предотвращения фриза GUI при таймауте
+            class EchoWorker(QThread):
+                finished = pyqtSignal(bool, str)
+                
+                def __init__(self, ip, port, aet):
+                    super().__init__()
+                    self.ip = ip
+                    self.port = port
+                    self.aet = aet
+                    
+                def run(self):
+                    try:
+                        from pynetdicom import AE
+                        
+                        ae = AE(ae_title=b"AIC_TEST_SCU")
+                        ae.add_requested_context('1.2.840.10008.1.1')
+                        
+                        # Выполняем проверку C-ECHO
+                        assoc = ae.associate(self.ip, self.port, ae_title=self.aet.encode('utf-8'))
+                        if assoc.is_established:
+                            status = assoc.send_c_echo()
+                            assoc.release()
+                            if status and getattr(status, 'Status', None) == 0x0000:
+                                self.finished.emit(True, "Соединение успешно установлено! Monaco отвечает на DICOM Echo (C-ECHO) ✅")
+                            else:
+                                self.finished.emit(False, f"Ассоциация установлена, но Monaco отклонил Echo. Статус: {status} ❌")
+                        else:
+                            self.finished.emit(False, "Не удалось установить DICOM-соединение с Monaco.\nПроверьте IP-адрес, Порт и AE Title ❌")
+                    except Exception as e:
+                        self.finished.emit(False, f"Ошибка при проверке соединения: {e} ❌")
+            
+            self.echo_thread = EchoWorker(ip, port, aet)
+            
+            def on_echo_finished(success, message):
+                QApplication.restoreOverrideCursor()
+                self.btn_ping_monaco.setEnabled(True)
+                if success:
+                    QMessageBox.information(self, "Успех ✅", message)
+                else:
+                    QMessageBox.critical(self, "Ошибка соединения ❌", message)
+                    
+            self.echo_thread.finished.connect(on_echo_finished)
+            self.echo_thread.start()
 
         def on_sound_check_changed(self):
             self.save_settings()
@@ -2303,6 +2500,7 @@ if PYQT_AVAILABLE:
                     self.organs_list.addItem(item)
 
             self.is_updating_presets = False
+            self.restore_group_visibilities()
             self.update_checked_organs_count()
 
         def update_item_color_icon(self, item: QListWidgetItem, organ_name: str):
@@ -2391,6 +2589,7 @@ if PYQT_AVAILABLE:
 
         def load_settings(self):
             """Загружает сохраненное состояние интерфейса."""
+            self.is_loading_settings = True
             self.preset_combo.blockSignals(True)
             self.organs_list.blockSignals(True)
             self.is_updating_presets = True
@@ -2424,7 +2623,7 @@ if PYQT_AVAILABLE:
                 clean_blobs = self.settings.value("clean_blobs", True, type=bool)
                 self.clean_blobs_check.setChecked(clean_blobs)
 
-                smoothing = self.settings.value("smoothing", False, type=bool)
+                smoothing = self.settings.value("smoothing", True, type=bool)
                 self.smoothing_check.setChecked(smoothing)
                 self.smoothing_combo.setEnabled(smoothing)
 
@@ -2441,6 +2640,53 @@ if PYQT_AVAILABLE:
                 use_gpu = self.settings.value("use_gpu", True, type=bool)
                 self.radio_gpu.setChecked(use_gpu)
                 self.radio_cpu.setChecked(not use_gpu)
+
+                # Загружаем параметры Elekta mod с блокировкой сигналов, чтобы не затереть QSettings
+                self.elekta_local_aet_edit.blockSignals(True)
+                self.elekta_local_port_edit.blockSignals(True)
+                self.elekta_monaco_aet_edit.blockSignals(True)
+                self.elekta_monaco_port_edit.blockSignals(True)
+                self.elekta_mode_check.blockSignals(True)
+                
+                elekta_mode_enabled = False
+                try:
+                    elekta_local_aet = str(self.settings.value("elekta_local_aet", "AIC_SCP"))
+                    self.elekta_local_aet_edit.setText(elekta_local_aet)
+                    
+                    elekta_local_port = str(self.settings.value("elekta_local_port", "10404"))
+                    self.elekta_local_port_edit.setText(elekta_local_port)
+                    
+                    elekta_monaco_aet = str(self.settings.value("elekta_monaco_aet", "MONACO"))
+                    self.elekta_monaco_aet_edit.setText(elekta_monaco_aet)
+                    
+                    elekta_monaco_port = str(self.settings.value("elekta_monaco_port", "104"))
+                    self.elekta_monaco_port_edit.setText(elekta_monaco_port)
+                    
+                    # Безопасное чтение булевого значения с подробным логированием
+                    val = self.settings.value("elekta_mode_enabled", False)
+                    logger.info(f"[Elekta Debug]: Значение из реестра 'elekta_mode_enabled' = {val} (тип: {type(val)})")
+                    
+                    if isinstance(val, str):
+                        elekta_mode_enabled = val.lower() in ("true", "1")
+                    else:
+                        elekta_mode_enabled = bool(val)
+                        
+                    logger.info(f"[Elekta Debug]: Спарсенное состояние чекбокса = {elekta_mode_enabled}")
+                    
+                    self.elekta_mode_check.setChecked(elekta_mode_enabled)
+                    logger.info(f"[Elekta Debug]: Состояние чекбокса после setChecked = {self.elekta_mode_check.isChecked()}")
+                except Exception as elekta_err:
+                    logger.error(f"Ошибка при безопасном чтении настроек Elekta mod: {elekta_err}", exc_info=True)
+                finally:
+                    self.elekta_local_aet_edit.blockSignals(False)
+                    self.elekta_local_port_edit.blockSignals(False)
+                    self.elekta_monaco_aet_edit.blockSignals(False)
+                    self.elekta_monaco_port_edit.blockSignals(False)
+                    self.elekta_mode_check.blockSignals(False)
+                
+                # Вручную триггерим логику включения/выключения Elekta mod в зависимости от загруженного состояния
+                if elekta_mode_enabled:
+                    self.on_elekta_mode_changed(2)
 
                 # Восстанавливаем галочки органов (без сигналов)
                 checked_organs = self.settings.value("checked_organs", None)
@@ -2469,6 +2715,7 @@ if PYQT_AVAILABLE:
                 self.is_updating_presets = False
                 self.organs_list.blockSignals(False)
                 self.preset_combo.blockSignals(False)
+                self.is_loading_settings = False
                 
                 input_dir = self.settings.value("input_dir", "")
                 if input_dir and os.path.isdir(input_dir):
@@ -2478,6 +2725,8 @@ if PYQT_AVAILABLE:
 
         def save_settings(self):
             """Сохраняет состояние интерфейса в QSettings."""
+            if getattr(self, 'is_loading_settings', False):
+                return
             self.settings.setValue("input_dir", self.input_edit.text().strip())
             self.settings.setValue("server_url", self.server_url_edit.text().strip())
             self.settings.setValue("client_name", self.client_name_edit.text().strip())
@@ -2496,6 +2745,18 @@ if PYQT_AVAILABLE:
             self.settings.setValue("play_sound", self.sound_check.isChecked())
             self.settings.setValue("use_gpu", self.radio_gpu.isChecked())
             
+            # Сохраняем параметры Elekta mod
+            if hasattr(self, 'elekta_mode_check'):
+                self.settings.setValue("elekta_mode_enabled", self.elekta_mode_check.isChecked())
+            if hasattr(self, 'elekta_local_aet_edit'):
+                self.settings.setValue("elekta_local_aet", self.elekta_local_aet_edit.text().strip())
+            if hasattr(self, 'elekta_local_port_edit'):
+                self.settings.setValue("elekta_local_port", self.elekta_local_port_edit.text().strip())
+            if hasattr(self, 'elekta_monaco_aet_edit'):
+                self.settings.setValue("elekta_monaco_aet", self.elekta_monaco_aet_edit.text().strip())
+            if hasattr(self, 'elekta_monaco_port_edit'):
+                self.settings.setValue("elekta_monaco_port", self.elekta_monaco_port_edit.text().strip())
+            
             checked_organs = []
             for i in range(self.organs_list.count()):
                 item = self.organs_list.item(i)
@@ -2506,6 +2767,7 @@ if PYQT_AVAILABLE:
                     if organ_name not in checked_organs:
                         checked_organs.append(organ_name)
             self.settings.setValue("checked_organs", checked_organs)
+            self.settings.sync()
 
         def sync_config_from_server(self) -> bool:
             """Синхронизирует всю конфигурацию пресетов, цветов и лицензий с сервера FastAPI."""
@@ -2543,7 +2805,7 @@ if PYQT_AVAILABLE:
                     
                     # 3. Полностью инициализируем пресеты и органы в GUI
                     self.init_presets_and_organs()
-                    self.update_status_display()
+                    self.update_license_status_label()
                     
                     # 4. Восстанавливаем галочки
                     self.organs_list.blockSignals(True)
@@ -2738,6 +3000,12 @@ if PYQT_AVAILABLE:
                 self.series_table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
                 
                 # Восстанавливаем выделение
+                force_viewer_update = False
+                if hasattr(self, '_auto_select_study_path') and self._auto_select_study_path:
+                    selected_study_path = self._auto_select_study_path
+                    self._auto_select_study_path = None
+                    force_viewer_update = True
+
                 if selected_study_path:
                     target_row = -1
                     for r in range(self.series_table.rowCount()):
@@ -2756,6 +3024,11 @@ if PYQT_AVAILABLE:
                 self.series_table.setUpdatesEnabled(True)
                 self.on_scan_finished()
                 self._is_updating_table = False
+                
+                # Если было автовыделение нового Monaco-исследования, форсируем обновление вьюера теперь, когда флаг сброшен!
+                if force_viewer_update and selected_study_path:
+                    logger.info(f"Форсированное обновление вьюера для Monaco-исследования: {selected_study_path}")
+                    self.on_series_selected()
             
         def update_run_button(self, is_patient_selected: bool, custom_text: str = None):
             # Поиск активного воркера для выделенного в таблице пациента
@@ -2914,16 +3187,19 @@ if PYQT_AVAILABLE:
                 except Exception as e:
                     logger.error(f"Не удалось открыть папку: {e}")
 
-        def show_context_menu(self, position):
+        def show_series_context_menu(self, position):
             selected = self.series_table.selectedItems()
             if not selected:
                 return
             
             row = selected[0].row()
+            patient_name = self.series_table.item(row, 0).text()
+            patient_id = self.series_table.item(row, 1).text()
             path = self.series_table.item(row, 6).text()
             
             menu = QMenu(self.series_table)
-            delete_action = menu.addAction("Удалить")
+            delete_action = menu.addAction("Удалить пациента")
+            delete_structs_action = menu.addAction("Удалить файл структур")
             
             action = menu.exec(self.series_table.viewport().mapToGlobal(position))
             if action == delete_action:
@@ -2931,7 +3207,7 @@ if PYQT_AVAILABLE:
                 reply = QMessageBox.question(
                     self,
                     "Удаление исследования",
-                    "Вы уверены, что хотите безвозвратно удалить папку этого исследования с диска?\n\n" + path,
+                    f"Вы уверены, что хотите безвозвратно удалить папку этого исследования с диска?\n\n{path}",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.No
                 )
@@ -2944,6 +3220,76 @@ if PYQT_AVAILABLE:
                     except Exception as e:
                         QMessageBox.critical(self, "Ошибка удаления", f"Не удалось удалить папку:\n{e}")
                         logger.error(f"Ошибка удаления: {e}")
+                self.scan_timer.start(15000)
+                
+            elif action == delete_structs_action:
+                self.scan_timer.stop()
+                try:
+                    import glob
+                    import pydicom
+                    
+                    rtstructs = []
+                    if path and os.path.isdir(path):
+                        for f in glob.glob(os.path.join(path, "*.dcm")):
+                            try:
+                                ds = pydicom.dcmread(f, stop_before_pixels=True)
+                                if str(getattr(ds, 'Modality', '')) == 'RTSTRUCT':
+                                    rtstructs.append(f)
+                            except Exception:
+                                pass
+                        rtstructs.sort(key=os.path.getmtime)
+                    
+                    if not rtstructs:
+                        QMessageBox.information(self, "Удаление структур", "У выбранного пациента нет файлов структур.")
+                        self.scan_timer.start(15000)
+                        return
+                        
+                    if len(rtstructs) == 1:
+                        reply = QMessageBox.question(
+                            self,
+                            "Удаление файла структур",
+                            f"Вы действительно хотите удалить файл структур пациента {patient_name} ({patient_id})?",
+                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                            QMessageBox.StandardButton.No
+                        )
+                        if reply == QMessageBox.StandardButton.Yes:
+                            os.remove(rtstructs[0])
+                            logger.info(f"Удален файл структур: {rtstructs[0]}")
+                            root_path = self.input_edit.text().strip()
+                            if root_path and os.path.isdir(root_path):
+                                self.start_dicom_scan(root_path, is_manual=False)
+                    else:
+                        msg_box = QMessageBox(self)
+                        msg_box.setWindowTitle("Уточните действие")
+                        msg_box.setText("У пациента обнаружено несколько файлов структур. Уточните действие:")
+                        msg_box.setIcon(QMessageBox.Icon.Question)
+                        
+                        btn_all = msg_box.addButton("удалить все файлы структур пациента", QMessageBox.ButtonRole.ActionRole)
+                        btn_last = msg_box.addButton("удалить последний файл структур", QMessageBox.ButtonRole.ActionRole)
+                        btn_except_last = msg_box.addButton("удалить все кроме последнего файла структур", QMessageBox.ButtonRole.ActionRole)
+                        btn_cancel = msg_box.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+                        
+                        msg_box.exec()
+                        clicked_btn = msg_box.clickedButton()
+                        
+                        files_to_delete = []
+                        if clicked_btn == btn_all:
+                            files_to_delete = rtstructs
+                        elif clicked_btn == btn_last:
+                            files_to_delete = [rtstructs[-1]]
+                        elif clicked_btn == btn_except_last:
+                            files_to_delete = rtstructs[:-1]
+                            
+                        if files_to_delete:
+                            for f in files_to_delete:
+                                os.remove(f)
+                                logger.info(f"Удален файл структур: {f}")
+                            root_path = self.input_edit.text().strip()
+                            if root_path and os.path.isdir(root_path):
+                                self.start_dicom_scan(root_path, is_manual=False)
+                except Exception as e:
+                    QMessageBox.critical(self, "Ошибка удаления", f"Не удалось удалить файлы структур:\n{e}")
+                    logger.error(f"Ошибка удаления структур: {e}")
                 self.scan_timer.start(15000)
 
         def update_viewer_with_dicom(self, folder_path: str):
@@ -3065,9 +3411,9 @@ if PYQT_AVAILABLE:
                 # Возвращаем левую панель и сплиттеры к стандартным размерам, только если не был включен режим просмотра
                 if not was_checked:
                     if hasattr(self, 'left_card') and hasattr(self, 'splitter'):
-                        self.left_card.setMinimumWidth(400)
-                        self.left_card.setMaximumWidth(480)
-                        self.splitter.setSizes([430, 490])
+                        self.left_card.setMinimumWidth(490)
+                        self.left_card.setMaximumWidth(max(490, int(self.width() * 0.5)))
+                        self.splitter.setSizes([490, 430])
                     if hasattr(self, 'main_splitter'):
                         self.main_splitter.setSizes([600, 400])
                     if hasattr(self, 'v_splitter'):
@@ -3140,9 +3486,9 @@ if PYQT_AVAILABLE:
                     self.chk_show_structures.blockSignals(False)
                     
                     if hasattr(self, 'left_card') and hasattr(self, 'splitter'):
-                        self.left_card.setMinimumWidth(400)
-                        self.left_card.setMaximumWidth(480)
-                        self.splitter.setSizes([430, 490])
+                        self.left_card.setMinimumWidth(490)
+                        self.left_card.setMaximumWidth(max(490, int(self.width() * 0.5)))
+                        self.splitter.setSizes([490, 430])
                     if hasattr(self, 'main_splitter'):
                         self.main_splitter.setSizes([600, 400])
                     if hasattr(self, 'v_splitter'):
@@ -3245,9 +3591,9 @@ if PYQT_AVAILABLE:
                 
                 # Увеличиваем вьюер за счет сжатия таблицы КТ и логов (левая панель со структурами сохраняет стандартный размер!)
                 if hasattr(self, 'left_card') and hasattr(self, 'splitter'):
-                    self.left_card.setMinimumWidth(400)
-                    self.left_card.setMaximumWidth(480)
-                    self.splitter.setSizes([430, 490])
+                    self.left_card.setMinimumWidth(490)
+                    self.left_card.setMaximumWidth(max(490, int(self.width() * 0.5)))
+                    self.splitter.setSizes([490, 430])
                 if hasattr(self, 'main_splitter'):
                     self.main_splitter.setSizes([150, 850])
                 if hasattr(self, 'v_splitter'):
@@ -3321,9 +3667,9 @@ if PYQT_AVAILABLE:
                 
                 # Возвращаем левую панель и сплиттеры к стандартным размерам
                 if hasattr(self, 'left_card') and hasattr(self, 'splitter'):
-                    self.left_card.setMinimumWidth(400)
-                    self.left_card.setMaximumWidth(480)
-                    self.splitter.setSizes([430, 490])
+                    self.left_card.setMinimumWidth(490)
+                    self.left_card.setMaximumWidth(max(490, int(self.width() * 0.5)))
+                    self.splitter.setSizes([490, 430])
                 if hasattr(self, 'main_splitter'):
                     self.main_splitter.setSizes([600, 400])
                 if hasattr(self, 'v_splitter'):
@@ -3363,9 +3709,9 @@ if PYQT_AVAILABLE:
                 
                 # Возвращаем левую панель и сплиттеры к стандартным размерам при отсутствии файла
                 if hasattr(self, 'left_card') and hasattr(self, 'splitter'):
-                    self.left_card.setMinimumWidth(400)
-                    self.left_card.setMaximumWidth(480)
-                    self.splitter.setSizes([430, 490])
+                    self.left_card.setMinimumWidth(490)
+                    self.left_card.setMaximumWidth(max(490, int(self.width() * 0.5)))
+                    self.splitter.setSizes([490, 430])
                 if hasattr(self, 'main_splitter'):
                     self.main_splitter.setSizes([600, 400])
                 if hasattr(self, 'v_splitter'):
@@ -4548,6 +4894,67 @@ if PYQT_AVAILABLE:
             enabled = (state == 2)
             self.smoothing_combo.setEnabled(enabled)
 
+        def on_elekta_mode_changed(self, state: int):
+            """Слот изменения состояния чекбокса Elekta mod."""
+            enabled = (state == 2)
+            
+            # Переключаем видимость виджета настроек
+            if hasattr(self, 'elekta_settings_widget'):
+                self.elekta_settings_widget.setVisible(enabled)
+                
+            if enabled:
+                # Запоминаем текущую папку
+                self._saved_user_dir = self.input_edit.text().strip()
+                
+                # Блокируем выбор папки
+                self.input_edit.setEnabled(False)
+                self.btn_input.setEnabled(False)
+                
+                # Устанавливаем в "DICOM"
+                self.input_edit.setText("DICOM")
+                
+                # Инициализируем менеджер, если ещё не создан
+                if not hasattr(self, 'elekta_manager'):
+                    from elekta_mod import ElektaManager
+                    self.elekta_manager = ElektaManager(
+                        output_dir="DICOM",
+                        log_callback=None
+                    )
+                
+                # Считываем настройки из полей ввода
+                port_str = self.elekta_local_port_edit.text().strip()
+                port = int(port_str) if port_str.isdigit() else 10404
+                ae_title = self.elekta_local_aet_edit.text().strip() or "AIC_SCP"
+                
+                # Запускаем SCP-сервер
+                self.elekta_manager.start_receiver(
+                    port=port,
+                    ae_title=ae_title,
+                    study_received_callback=self.on_elekta_study_received
+                )
+            else:
+                # Разблокируем
+                self.input_edit.setEnabled(True)
+                self.btn_input.setEnabled(True)
+                
+                # Восстанавливаем сохраненную папку
+                if hasattr(self, '_saved_user_dir') and self._saved_user_dir:
+                    self.input_edit.setText(self._saved_user_dir)
+                
+                # Останавливаем приемник
+                if hasattr(self, 'elekta_manager'):
+                    self.elekta_manager.stop_receiver()
+
+        def on_elekta_study_received(self, study_dir: str, patient_id: str):
+            """Вызывается, когда исследование успешно принято по DICOM."""
+            self.append_log(f"Серия КТ успешно принята от Monaco и сохранена в: {study_dir} ✅", "#00ffd0")
+            
+            # Запускаем сканирование
+            self.start_dicom_scan("DICOM", is_manual=False)
+            
+            # Сохраняем путь для автовыбора
+            self._auto_select_study_path = study_dir
+
         def append_log(self, message: str, color: str):
             """Потокобезопасное добавление логов в текстовое окно."""
             if not hasattr(self, 'log_edit'):
@@ -4828,14 +5235,26 @@ if PYQT_AVAILABLE:
                 
             server_url = self.get_server_url()
             client_id = self.client_name_edit.text().strip()
-            self.status_worker = NetworkStatusWorker(server_url, timeout=0.8, client_id=client_id)
+            self.status_worker = NetworkStatusWorker(server_url, timeout=3.0, client_id=client_id)
             self.status_worker.status_received.connect(self.on_status_received)
             self.status_worker.error_occurred.connect(self.on_status_error)
             self.status_worker.start()
 
         def on_status_received(self, data: dict):
             """Слот обработки успешно полученного статуса сервера из фонового потока."""
+            self.failed_status_checks = 0
             try:
+                # Динамическая синхронизация лицензии суб-моделей
+                new_license = data.get("licenses", "")
+                old_license = getattr(self.engine, "licenses", "")
+                if isinstance(new_license, str) and new_license != old_license:
+                    logger.info(f"Динамическая синхронизация лицензии с сервером: '{old_license}' -> '{new_license}'.")
+                    self.engine.licenses = new_license
+                    if hasattr(self.engine, "save_presets_config"):
+                        self.engine.save_presets_config()
+                    self.init_presets_and_organs()
+                    self.update_license_status_label()
+
                 is_paused = data.get("is_paused", False)
                 self.is_server_online = True
                 self.is_client_blocked = False
@@ -4970,8 +5389,36 @@ if PYQT_AVAILABLE:
                             self.activity_timer.stop()
                         
                         if hasattr(self, '_current_active_job_id') and self._current_active_job_id:
-                            final_log = "[INFO]: Сетевой пайплайн успешно завершен!"
-                            self.log_edit.append(f"<br><span style='background-color: #107c41; color: white; font-weight: bold; padding: 4px;'>{final_log}</span><br>")
+                            finished_job = None
+                            for item in filtered_list:
+                                if item.get("job_id") == self._current_active_job_id:
+                                    finished_job = item
+                                    break
+                            
+                            if finished_job:
+                                status = finished_job.get("status")
+                                patient_name = finished_job.get("patient_name", "Неизвестный")
+                                if status == "SUCCESS":
+                                    step_text = finished_job.get("current_step", "")
+                                    count = 0
+                                    match_count = re.search(r'(?:создано|добавлено|структур|oar):\s*(\d+)', step_text.lower())
+                                    if match_count:
+                                        count = int(match_count.group(1))
+                                    elapsed = finished_job.get("elapsed", 0.0)
+                                    final_log = f"[INFO] [{patient_name}]: Пайплайн успешно завершен! Добавлено структур: {count}. Общее время работы: {elapsed:.1f} сек."
+                                    bg_color = "#107c41"
+                                elif status == "CANCELLED":
+                                    final_log = f"[INFO] [{patient_name}]: Задача отменена."
+                                    bg_color = "#d35400"
+                                else:
+                                    err_msg = finished_job.get("current_step", "Сбой")
+                                    final_log = f"[ERROR] [{patient_name}]: Сбой оконтурирования: {err_msg}"
+                                    bg_color = "#c0392b"
+                            else:
+                                final_log = "[INFO]: Сетевой пайплайн успешно завершен!"
+                                bg_color = "#107c41"
+                                
+                            self.log_edit.append(f"<br><span style='background-color: {bg_color}; color: white; font-weight: bold; padding: 4px;'>{final_log}</span><br>")
                             self._current_active_job_id = None
                             self.last_client_log_index = 0
 
@@ -4982,7 +5429,9 @@ if PYQT_AVAILABLE:
 
         def on_status_error(self, err_msg: str):
             """Слот обработки сетевой ошибки фонового воркера."""
-            self.table_queue.setRowCount(0)
+            self.failed_status_checks = getattr(self, "failed_status_checks", 0) + 1
+            if self.failed_status_checks >= 5:
+                self.table_queue.setRowCount(0)
             self.is_server_online = False
             if "403" in err_msg or "blocked" in err_msg.lower() or "forbidden" in err_msg.lower():
                 self.is_client_blocked = True
@@ -4994,7 +5443,7 @@ if PYQT_AVAILABLE:
             self.lbl_server_status_indicator.setStyleSheet("font-weight: bold; color: #ff6b6b; margin-right: 10px; margin-bottom: 7px; font-size: 12px;")
             self.update_run_button(bool(self.series_table.selectedItems()))
 
-        def show_context_menu(self, pos):
+        def show_queue_context_menu(self, pos):
             """Отображает контекстное меню для управления задачами в очереди."""
             row = self.table_queue.currentRow()
             if row < 0:
@@ -5148,6 +5597,32 @@ if PYQT_AVAILABLE:
 
                     final_log = f"[INFO]: Задача пациента {patient_name} успешно завершена! Добавлено структур: {count}. Время работы: {time_str} сек."
                     self.append_log(final_log, "#2ecc71")
+
+                    # Автоматическая фоновая отправка результатов на Monaco в режиме Elekta mod
+                    if getattr(self, 'elekta_mode_check', None) and self.elekta_mode_check.isChecked():
+                        if hasattr(self, 'elekta_manager') and self.elekta_manager.last_monaco_ip:
+                            # Обновляем порт и AET Monaco из полей ввода перед отправкой
+                            monaco_aet = self.elekta_monaco_aet_edit.text().strip() or "MONACO"
+                            monaco_port_str = self.elekta_monaco_port_edit.text().strip()
+                            monaco_port = int(monaco_port_str) if monaco_port_str.isdigit() else 104
+                            
+                            self.elekta_manager.monaco_aet = monaco_aet
+                            self.elekta_manager.monaco_port = monaco_port
+                            
+                            self.append_log(f"[Elekta]: Запуск фонового экспорта снимков и RTSTRUCT для {patient_name} на Monaco ({self.elekta_manager.last_monaco_ip}:{monaco_port}, AET: {monaco_aet})...", "#00ffd0")
+                            
+                            def on_elekta_export_finished(send_success, send_msg):
+                                if send_success:
+                                    self.append_log(f"[Elekta]: {send_msg}", "#2ecc71")
+                                else:
+                                    self.append_log(f"[Elekta ERROR]: {send_msg}", "#ff6b6b")
+                                    
+                            self.elekta_manager.send_back_to_monaco(
+                                study_dir=dicom_dir,
+                                finished_callback=on_elekta_export_finished
+                            )
+                        else:
+                            self.append_log("[Elekta WARNING]: Невозможно запустить экспорт. Сохраненный IP Monaco отсутствует.", "#ff6b6b")
                     
                     QMessageBox.information(self, "Успех", f"Автоматическое оконтурирование для пациента {patient_name} завершено успешно!")
                 else:
@@ -5678,6 +6153,13 @@ if PYQT_AVAILABLE:
                 QMessageBox.StandardButton.No
             )
             if reply == QMessageBox.StandardButton.Yes:
+                # Принудительно сохраняем настройки перед выходом
+                self.save_settings()
+
+                # Гарантированно останавливаем приемник Elekta mod при выходе
+                if hasattr(self, 'elekta_manager'):
+                    self.elekta_manager.stop_receiver()
+
                 if hasattr(self, 'active_workers'):
                     for w in list(self.active_workers):
                         if w.isRunning():

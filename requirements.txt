@@ -1,4 +1,6 @@
+--index-url https://pypi.tuna.tsinghua.edu.cn/simple
 --extra-index-url https://download.pytorch.org/whl/cu121
+--extra-index-url https://pypi.org/simple
 acvl_utils==0.2.6
 annotated-doc==0.0.4
 annotated-types==0.7.0
@@ -55,6 +57,7 @@ pyarrow==24.0.0
 pydantic==2.13.4
 pydantic_core==2.46.4
 pydicom==3.0.2
+pynetdicom>=3.0.0
 Pygments==2.20.0
 pyparsing==3.3.2
 PyQt6==6.11.0

@@ -180,7 +180,6 @@ QComboBox QAbstractItemView {
 }
 
 QComboBox QAbstractItemView::item {
-    color: #ffffff;
     background-color: #2d2d2d;
 }
 
@@ -335,7 +334,6 @@ QProgressBar::chunk {
         stop: 0.75 #00a38f, 
         stop: 1.00 #00a38f
     );
-    background-size: 40px 40px;
     border-radius: 4px;
 }
 

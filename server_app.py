@@ -825,12 +825,23 @@ if PYQT_AVAILABLE:
             QApplication.restoreOverrideCursor()
             
             if not valid:
-                QMessageBox.critical(
+                reply = QMessageBox.question(
                     self,
-                    "Недействительная лицензия ❌",
-                    "Введенный лицензионный ключ недействителен.\n"
-                    "Проверка на сервере TotalSegmentator отклонена. Пожалуйста, убедитесь в правильности ключа."
+                    "Лицензия отклонена или нет сети ❌",
+                    "Проверка на сервере TotalSegmentator не удалась.\n"
+                    "Это может быть вызвано отсутствием интернета, блокировкой сети или истекшим сроком действия ключа.\n\n"
+                    "Вы действительно хотите сохранить этот ключ локально без онлайн-проверки?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
                 )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.engine.load_presets_config()
+                    self.engine.licenses = key
+                    self.engine.save_presets_config()
+                    self._write_license_to_totalseg_config(key)
+                    self.edit_key.clear()
+                    self.update_status_display()
+                    QMessageBox.information(self, "Успех", "Лицензия сохранена локально.")
                 return
                 
             # Сохранение валидной лицензии
@@ -1554,6 +1565,20 @@ if PYQT_AVAILABLE:
             if self.parent_app:
                 self.parent_app.send_new_queue_order(new_job_ids)
 
+    def get_cpu_model() -> str:
+        try:
+            import winreg
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+            model, _ = winreg.QueryValueEx(key, "ProcessorNameString")
+            winreg.CloseKey(key)
+            return model.strip()
+        except Exception:
+            try:
+                import platform
+                return platform.processor() or "процессор"
+            except Exception:
+                return "процессор"
+
     class MainWindow(QMainWindow):
         """Главное окно графического интерфейса приложения."""
         def __init__(self):
@@ -1566,7 +1591,8 @@ if PYQT_AVAILABLE:
             self.collapsed_groups = {"Остальное": True, "Отделы головного мозга (Brain Structures)": True}
             self.worker = None
             self.active_workers = []
-            self.settings = QSettings("AIContourCorp", "AIContour")
+            os.makedirs("config", exist_ok=True)
+            self.settings = QSettings("config/server_settings.ini", QSettings.Format.IniFormat)
 
             # Инициализация вычислительного движка
             self.engine = ContourEngine()
@@ -1601,6 +1627,7 @@ if PYQT_AVAILABLE:
             # Инициализируем переменные состояния сервера
             self.server_is_paused = False
             self.is_toggling_pause = False
+            self.failed_server_status_checks = 0
             self.server_process = None
             self.start_server_process()
 
@@ -1862,21 +1889,60 @@ if PYQT_AVAILABLE:
             
             tab2_layout.addWidget(merge_group)
             
-            gpu_available = self.engine.is_gpu_available()
-
             # Группа 1: Вычислительное устройство
             device_group = QGroupBox("Вычислительное устройство")
             device_group_layout = QVBoxLayout(device_group)
             device_group_layout.setSpacing(10)
-            self.radio_cpu = QRadioButton("CPU (Центральный процессор)")
-            self.radio_gpu = QRadioButton("GPU CUDA (Рекомендуется)")
             
-            # На клиенте обе опции (GPU/CPU) всегда доступны для выбора, так как вычисления идут на сервере
-            self.radio_gpu.setChecked(True)
-            self.radio_gpu.setEnabled(True)
+            cpu_model = get_cpu_model()
+            self.radio_cpu = QRadioButton(f"CPU ({cpu_model})")
+            self.radio_gpu = QRadioButton("GPU CUDA")
+            
+            self.gpu_combo = NonScrollComboBox()
+            self.gpu_combo.setStyleSheet("margin-left: 20px; padding: 4px;")
+            
+            # Заполняем список видеокарт
+            gpus = self.engine.get_gpus_info()
+            if gpus:
+                for gpu in gpus:
+                    item_text = f"GPU {gpu['index']}: {gpu['name']} ({gpu['memory_gb']} GB, CC {gpu['compute_capability']})"
+                    self.gpu_combo.addItem(item_text)
                 
+                # Окрашивание
+                for i, gpu in enumerate(gpus):
+                    cc_str = gpu.get("compute_capability", "0.0")
+                    try:
+                        major = int(cc_str.split('.')[0])
+                    except Exception:
+                        major = 0
+                    
+                    memory = gpu.get("memory_gb", 0.0)
+                    
+                    if major < 6 or memory < 7.5:
+                        color = "#e74c3c"  # Красный
+                    elif 7.5 <= memory < 11.5:
+                        color = "#f1c40f"  # Желтый
+                    else:
+                        color = "#2ecc71"  # Зеленый
+                        
+                    self.gpu_combo.setItemData(i, QBrush(QColor(color)), Qt.ItemDataRole.ForegroundRole)
+            else:
+                self.gpu_combo.addItem("Нет доступных GPU CUDA")
+                self.radio_gpu.setEnabled(False)
+                self.radio_cpu.setChecked(True)
+            
             device_group_layout.addWidget(self.radio_gpu)
+            device_group_layout.addWidget(self.gpu_combo)
             device_group_layout.addWidget(self.radio_cpu)
+            
+            # Активация комбобокса
+            self.radio_gpu.toggled.connect(self.gpu_combo.setEnabled)
+            self.gpu_combo.setEnabled(self.radio_gpu.isChecked())
+            
+            self.radio_gpu.toggled.connect(self.save_settings)
+            self.radio_cpu.toggled.connect(self.save_settings)
+            self.gpu_combo.currentIndexChanged.connect(self.save_settings)
+                
             tab2_layout.addWidget(device_group)
 
             # Группа 2: Режимы точности TotalSegmentator
@@ -1912,6 +1978,7 @@ if PYQT_AVAILABLE:
             self.smoothing_check.setToolTip(
                 "Применяет Гауссову фильтрацию к 3D-маске, убирая «ступенчатость» срезов."
             )
+            self.smoothing_check.setChecked(True)
             self.smoothing_check.stateChanged.connect(self.on_smoothing_check_changed)
             
             smoothing_param_layout = QHBoxLayout()
@@ -1981,6 +2048,26 @@ if PYQT_AVAILABLE:
             license_group_layout.addWidget(self.btn_manage_licenses)
             license_group_layout.addWidget(self.lbl_license_status)
             admin_settings_layout.addWidget(license_group)
+
+            # Группа: Управление моделями ИИ 📦
+            models_group = QGroupBox("Управление моделями ИИ 📦")
+            models_group_layout = QVBoxLayout(models_group)
+            models_group_layout.setSpacing(10)
+            
+            lbl_models_descr = QLabel(
+                "Вы можете предварительно скачать необходимые модели ИИ на локальный диск сервера для ускорения работы или удалить их."
+            )
+            lbl_models_descr.setWordWrap(True)
+            lbl_models_descr.setStyleSheet("color: #888888; font-size: 11px;")
+            
+            self.btn_manage_models = QPushButton("📦 Модели")
+            self.btn_manage_models.setObjectName("btnAction")
+            self.btn_manage_models.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_manage_models.clicked.connect(self.show_models_dialog)
+            
+            models_group_layout.addWidget(lbl_models_descr)
+            models_group_layout.addWidget(self.btn_manage_models)
+            admin_settings_layout.addWidget(models_group)
  
             # Группа 6: Параметры соединения с сервером AI Contour 🌐
             conn_group = QGroupBox("Соединение с сервером AI Contour 🌐")
@@ -2148,7 +2235,7 @@ if PYQT_AVAILABLE:
 </style>
 </head>
 <body>
-    <h1>Справка по работе с AI Contour (Краснодар)📖</h1>
+    <h1>Справка по работе с AI Contour📖</h1>
 
     <p><b>AI Contour</b> — интеллектуальное ПО для автоматического сегментирования органов риска (OAR) на КТ-снимках DICOM с использованием нейросети <b>TotalSegmentator</b>.</p>
 
@@ -2237,7 +2324,7 @@ if PYQT_AVAILABLE:
             self.series_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             self.series_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
             self.series_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            self.series_table.customContextMenuRequested.connect(self.show_context_menu)
+            self.series_table.customContextMenuRequested.connect(self.show_series_context_menu)
             self.series_table.cellDoubleClicked.connect(self.on_table_double_clicked)
             self.series_table.setStyleSheet("""
                 QTableWidget {
@@ -2442,7 +2529,7 @@ if PYQT_AVAILABLE:
             self.table_queue.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
             self.table_queue.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             self.table_queue.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            self.table_queue.customContextMenuRequested.connect(self.show_context_menu)
+            self.table_queue.customContextMenuRequested.connect(self.show_queue_context_menu)
 
             queue_layout.addWidget(self.table_queue, 1)
             
@@ -2690,6 +2777,7 @@ if PYQT_AVAILABLE:
                     self.organs_list.addItem(item)
 
             self.is_updating_presets = False
+            self.restore_group_visibilities()
             self.update_checked_organs_count()
 
         def update_item_color_icon(self, item: QListWidgetItem, organ_name: str):
@@ -2811,7 +2899,7 @@ if PYQT_AVAILABLE:
                 clean_blobs = self.settings.value("clean_blobs", True, type=bool)
                 self.clean_blobs_check.setChecked(clean_blobs)
 
-                smoothing = self.settings.value("smoothing", False, type=bool)
+                smoothing = self.settings.value("smoothing", True, type=bool)
                 self.smoothing_check.setChecked(smoothing)
                 self.smoothing_combo.setEnabled(smoothing)
 
@@ -2828,6 +2916,10 @@ if PYQT_AVAILABLE:
                 use_gpu = self.settings.value("use_gpu", True, type=bool)
                 self.radio_gpu.setChecked(use_gpu)
                 self.radio_cpu.setChecked(not use_gpu)
+                
+                selected_gpu = self.settings.value("selected_gpu", 0, type=int)
+                if hasattr(self, "gpu_combo") and self.gpu_combo.count() > selected_gpu:
+                    self.gpu_combo.setCurrentIndex(selected_gpu)
 
                 # Восстанавливаем галочки органов (без сигналов)
                 checked_organs = self.settings.value("checked_organs", None)
@@ -2882,6 +2974,8 @@ if PYQT_AVAILABLE:
             self.settings.setValue("color_preset", self.color_preset_combo.currentText())
             self.settings.setValue("play_sound", self.sound_check.isChecked())
             self.settings.setValue("use_gpu", self.radio_gpu.isChecked())
+            if hasattr(self, "gpu_combo"):
+                self.settings.setValue("selected_gpu", self.gpu_combo.currentIndex())
             
             checked_organs = []
             for i in range(self.organs_list.count()):
@@ -3288,16 +3382,19 @@ if PYQT_AVAILABLE:
                 except Exception as e:
                     logger.error(f"Не удалось открыть папку: {e}")
 
-        def show_context_menu(self, position):
+        def show_series_context_menu(self, position):
             selected = self.series_table.selectedItems()
             if not selected:
                 return
             
             row = selected[0].row()
+            patient_name = self.series_table.item(row, 0).text()
+            patient_id = self.series_table.item(row, 1).text()
             path = self.series_table.item(row, 6).text()
             
             menu = QMenu(self.series_table)
-            delete_action = menu.addAction("Удалить")
+            delete_action = menu.addAction("Удалить пациента")
+            delete_structs_action = menu.addAction("Удалить файл структур")
             
             action = menu.exec(self.series_table.viewport().mapToGlobal(position))
             if action == delete_action:
@@ -3305,7 +3402,7 @@ if PYQT_AVAILABLE:
                 reply = QMessageBox.question(
                     self,
                     "Удаление исследования",
-                    "Вы уверены, что хотите безвозвратно удалить папку этого исследования с диска?\n\n" + path,
+                    f"Вы уверены, что хотите безвозвратно удалить папку этого исследования с диска?\n\n{path}",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.No
                 )
@@ -3318,6 +3415,76 @@ if PYQT_AVAILABLE:
                     except Exception as e:
                         QMessageBox.critical(self, "Ошибка удаления", f"Не удалось удалить папку:\n{e}")
                         logger.error(f"Ошибка удаления: {e}")
+                self.scan_timer.start(15000)
+                
+            elif action == delete_structs_action:
+                self.scan_timer.stop()
+                try:
+                    import glob
+                    import pydicom
+                    
+                    rtstructs = []
+                    if path and os.path.isdir(path):
+                        for f in glob.glob(os.path.join(path, "*.dcm")):
+                            try:
+                                ds = pydicom.dcmread(f, stop_before_pixels=True)
+                                if str(getattr(ds, 'Modality', '')) == 'RTSTRUCT':
+                                    rtstructs.append(f)
+                            except Exception:
+                                pass
+                        rtstructs.sort(key=os.path.getmtime)
+                    
+                    if not rtstructs:
+                        QMessageBox.information(self, "Удаление структур", "У выбранного пациента нет файлов структур.")
+                        self.scan_timer.start(15000)
+                        return
+                        
+                    if len(rtstructs) == 1:
+                        reply = QMessageBox.question(
+                            self,
+                            "Удаление файла структур",
+                            f"Вы действительно хотите удалить файл структур пациента {patient_name} ({patient_id})?",
+                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                            QMessageBox.StandardButton.No
+                        )
+                        if reply == QMessageBox.StandardButton.Yes:
+                            os.remove(rtstructs[0])
+                            logger.info(f"Удален файл структур: {rtstructs[0]}")
+                            root_path = self.input_edit.text().strip()
+                            if root_path and os.path.isdir(root_path):
+                                self.start_dicom_scan(root_path, is_manual=False)
+                    else:
+                        msg_box = QMessageBox(self)
+                        msg_box.setWindowTitle("Уточните действие")
+                        msg_box.setText("У пациента обнаружено несколько файлов структур. Уточните действие:")
+                        msg_box.setIcon(QMessageBox.Icon.Question)
+                        
+                        btn_all = msg_box.addButton("удалить все файлы структур пациента", QMessageBox.ButtonRole.ActionRole)
+                        btn_last = msg_box.addButton("удалить последний файл структур", QMessageBox.ButtonRole.ActionRole)
+                        btn_except_last = msg_box.addButton("удалить все кроме последнего файла структур", QMessageBox.ButtonRole.ActionRole)
+                        btn_cancel = msg_box.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+                        
+                        msg_box.exec()
+                        clicked_btn = msg_box.clickedButton()
+                        
+                        files_to_delete = []
+                        if clicked_btn == btn_all:
+                            files_to_delete = rtstructs
+                        elif clicked_btn == btn_last:
+                            files_to_delete = [rtstructs[-1]]
+                        elif clicked_btn == btn_except_last:
+                            files_to_delete = rtstructs[:-1]
+                            
+                        if files_to_delete:
+                            for f in files_to_delete:
+                                os.remove(f)
+                                logger.info(f"Удален файл структур: {f}")
+                            root_path = self.input_edit.text().strip()
+                            if root_path and os.path.isdir(root_path):
+                                self.start_dicom_scan(root_path, is_manual=False)
+                except Exception as e:
+                    QMessageBox.critical(self, "Ошибка удаления", f"Не удалось удалить файлы структур:\n{e}")
+                    logger.error(f"Ошибка удаления структур: {e}")
                 self.scan_timer.start(15000)
 
         def update_viewer_with_dicom(self, folder_path: str):
@@ -5629,6 +5796,10 @@ if PYQT_AVAILABLE:
             )
             if reply == QMessageBox.StandardButton.Yes:
                 logging.info("Закрытие панели управления сервером...")
+                try:
+                    self.save_settings()
+                except Exception as se:
+                    logging.error(f"Не удалось сохранить настройки при закрытии: {se}")
                 
                 # Останавливаем всех активных воркеров оконтуривания
                 if hasattr(self, 'active_workers'):
@@ -5827,6 +5998,7 @@ if PYQT_AVAILABLE:
                 return
                 
             if success:
+                self.failed_server_status_checks = 0
                 is_paused = data.get("is_paused", False)
                 info_list = data.get("jobs", [])
                 
@@ -5949,14 +6121,44 @@ if PYQT_AVAILABLE:
                                 self.activity_timer.stop()
                             
                             if hasattr(self, '_current_active_job_id') and self._current_active_job_id:
-                                final_log = "[INFO]: Сетевой пайплайн успешно завершен!"
-                                self.log_edit.append(f"<br><span style='background-color: #107c41; color: white; font-weight: bold; padding: 4px;'>{final_log}</span><br>")
+                                finished_job = None
+                                for item in info_list:
+                                    if item.get("job_id") == self._current_active_job_id:
+                                        finished_job = item
+                                        break
+                                
+                                if finished_job:
+                                    status = finished_job.get("status")
+                                    patient_name = finished_job.get("patient_name", "Неизвестный")
+                                    if status == "SUCCESS":
+                                        step_text = finished_job.get("current_step", "")
+                                        count = 0
+                                        match_count = re.search(r'(?:создано|добавлено|структур|oar):\s*(\d+)', step_text.lower())
+                                        if match_count:
+                                            count = int(match_count.group(1))
+                                        elapsed_val = finished_job.get("elapsed", 0.0)
+                                        final_log = f"[INFO] [{patient_name}]: Пайплайн успешно завершен! Добавлено структур: {count}. Общее время работы: {elapsed_val:.1f} сек."
+                                        bg_color = "#107c41"
+                                    elif status == "CANCELLED":
+                                        final_log = f"[INFO] [{patient_name}]: Задача отменена."
+                                        bg_color = "#d35400"
+                                    else:
+                                        err_msg = finished_job.get("current_step", "Сбой")
+                                        final_log = f"[ERROR] [{patient_name}]: Сбой оконтурирования: {err_msg}"
+                                        bg_color = "#c0392b"
+                                else:
+                                    final_log = "[INFO]: Сетевой пайплайн успешно завершен!"
+                                    bg_color = "#107c41"
+                                    
+                                self.log_edit.append(f"<br><span style='background-color: {bg_color}; color: white; font-weight: bold; padding: 4px;'>{final_log}</span><br>")
                                 self._current_active_job_id = None
                                 self.last_server_log_index = 0
                             self.update_statistics_ui()
             else:
+                self.failed_server_status_checks = getattr(self, "failed_server_status_checks", 0) + 1
                 self.lbl_server_address.setText("Подключение к API серверу... (Запуск/Оффлайн)")
-                self.table_queue.setRowCount(0)
+                if self.failed_server_status_checks >= 5:
+                    self.table_queue.setRowCount(0)
 
         def create_table_item(self, text: str, centered: bool = False) -> QTableWidgetItem:
             item = QTableWidgetItem(text)
@@ -5964,7 +6166,7 @@ if PYQT_AVAILABLE:
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             return item
 
-        def show_context_menu(self, pos):
+        def show_queue_context_menu(self, pos):
             """Отображает контекстное меню для управления задачами в очереди."""
             row = self.table_queue.currentRow()
             if row < 0:

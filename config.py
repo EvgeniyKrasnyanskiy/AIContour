@@ -53,6 +53,7 @@ ROI_TO_TASK_MAP = {
     'hard_palate': 'head_glands_cavities',
     'auditory_canal_left': 'head_glands_cavities',
     'auditory_canal_right': 'head_glands_cavities',
+    'inferior_vena_cava': 'total',
 }
 
 # Маппинг файлов масок ИИ на стандартные ID OAR
@@ -93,13 +94,14 @@ ORGAN_GROUPS = {
     ],
     "Брюшная полость (Abdomen)": [
         "spleen", "kidney_right", "kidney_left", "gallbladder", "liver", "stomach", "pancreas", "duodenum",
-        "adrenal_gland_left", "adrenal_gland_right", "portal_vein_and_splenic_vein", "small_bowel", "colon"
+        "adrenal_gland_left", "adrenal_gland_right", "portal_vein_and_splenic_vein", "small_bowel", "colon",
+        "inferior_vena_cava"
     ],
     "Малый таз (Pelvis)": [
         "urinary_bladder", "prostate", "sacrum", "hip_left", "hip_right", "femur_left", "femur_right",
         "iliac_artery_left", "iliac_artery_right", "iliac_vein_left", "iliac_vein_right",
         "gluteus_maximus_left", "gluteus_maximus_right", "gluteus_medius_left", "gluteus_medius_right",
-        "gluteus_minimus_left", "gluteus_minimus_right"
+        "gluteus_minimus_left", "gluteus_minimus_right", "iliopsoas_left", "iliopsoas_right"
     ],
     "Отделы головного мозга (Brain Structures)": [
         "brain_stem", "cerebellum", "thalamus_left", "thalamus_right",

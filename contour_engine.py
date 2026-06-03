@@ -42,6 +42,25 @@ from scipy.ndimage import label, gaussian_filter
 # Настройка локального логера движка
 logger = logging.getLogger("ContourEngine")
 
+# Динамический патч для rt-utils для соблюдения стандарта DICOM (длина строк типа DS не более 16 символов).
+# Округляет координаты точек контуров до 4 знаков после запятой, что полностью решает проблему
+# падений импорта в Monaco ("DICOM::VRDS value string over maximum") и черного экрана во вьюере.
+try:
+    import rt_utils.ds_helper
+    original_create_contour = rt_utils.ds_helper.create_contour
+
+    def patched_create_contour(series_slice, contour_data):
+        # Используем np.around, но преобразуем результат в список стандартных Python float,
+        # так как pydicom плохо работает с numpy.float64 внутри списков при валидации DS.
+        rounded_arr = np.around(contour_data, decimals=4)
+        rounded_data = rounded_arr.tolist() if hasattr(rounded_arr, "tolist") else [float(x) for x in rounded_arr]
+        return original_create_contour(series_slice, rounded_data)
+
+    rt_utils.ds_helper.create_contour = patched_create_contour
+    logger.info("Успешно применен патч округления координат RTSTRUCT для Monaco.")
+except Exception as pe:
+    logger.warning(f"Не удалось применить патч координат RTSTRUCT: {pe}")
+
 from config import ROI_TO_TASK_MAP, FILE_NAME_MAP, MONACO_NAMES_MAP, LICENSED_TASKS
 
 # Дефолтные настройки для автогенерации presets.json при его отсутствии
@@ -61,13 +80,15 @@ DEFAULT_PRESETS_DATA = {
         ],
         "Брюшная полость (Abdomen)": [
             "spleen", "kidney_right", "kidney_left", "gallbladder", "liver", "stomach", "pancreas", "duodenum",
-            "adrenal_gland_left", "adrenal_gland_right", "portal_vein_and_splenic_vein", "small_bowel", "colon"
+            "adrenal_gland_left", "adrenal_gland_right", "portal_vein_and_splenic_vein", "small_bowel", "colon",
+            "inferior_vena_cava"
         ],
         "Малый таз (Pelvis)": [
-            "urinary_bladder", "prostate", "sacrum", "hip_left", "hip_right", "femur_left", "femur_right",
+            "body", "spinal_cord", "aorta", "spleen", "kidney_right", "kidney_left", "liver", "stomach",
+            "pancreas", "duodenum", "portal_vein_and_splenic_vein", "small_bowel", "colon",
+            "urinary_bladder", "sacrum", "hip_left", "hip_right", "femur_left", "femur_right",
             "iliac_artery_left", "iliac_artery_right", "iliac_vein_left", "iliac_vein_right",
-            "gluteus_maximus_left", "gluteus_maximus_right", "gluteus_medius_left", "gluteus_medius_right",
-            "gluteus_minimus_left", "gluteus_minimus_right"
+            "iliopsoas_left", "iliopsoas_right", "inferior_vena_cava"
         ],
         "Отделы головного мозга (Brain Structures)": [
             "brain_stem", "cerebellum", "thalamus_left", "thalamus_right",
@@ -476,8 +497,10 @@ class ContourEngine:
                 continue
             full_total_preset.append(org)
             if org not in self.ru_names or self.ru_names[org] == org:
-                self.ru_names[org] = self.translate_organ_to_ru(org)
-                changed = True
+                new_val = self.translate_organ_to_ru(org)
+                if self.ru_names.get(org) != new_val:
+                    self.ru_names[org] = new_val
+                    changed = True
             if org not in self.colors:
                 self.colors[org] = self._get_default_color(org)
                 changed = True
@@ -487,8 +510,10 @@ class ContourEngine:
             # Проверяем, если значение совпадает с ключом ИЛИ не содержит ни одной кириллической буквы (остался латинский дубль)
             has_cyrillic = any(u'\u0400' <= char <= u'\u04FF' for char in self.ru_names[org])
             if self.ru_names[org] == org or not has_cyrillic:
-                self.ru_names[org] = self.translate_organ_to_ru(org)
-                changed = True
+                new_val = self.translate_organ_to_ru(org)
+                if self.ru_names[org] != new_val:
+                    self.ru_names[org] = new_val
+                    changed = True
 
         # Гарантируем переводы и дефолтные цвета для всех структур, объявленных в ORGAN_GROUPS из config
         from config import ORGAN_GROUPS
@@ -496,8 +521,10 @@ class ContourEngine:
             for org in organs:
                 has_cyrillic_org = org in self.ru_names and any(u'\u0400' <= char <= u'\u04FF' for char in self.ru_names[org])
                 if org not in self.ru_names or self.ru_names[org] == org or not has_cyrillic_org:
-                    self.ru_names[org] = self.translate_organ_to_ru(org)
-                    changed = True
+                    new_val = self.translate_organ_to_ru(org)
+                    if self.ru_names.get(org) != new_val:
+                        self.ru_names[org] = new_val
+                        changed = True
                 if org not in self.colors:
                     self.colors[org] = self._get_default_color(org)
                     changed = True
@@ -594,7 +621,7 @@ class ContourEngine:
                 changed = True
 
         if changed:
-            logger.info("Обнаружены изменения или новые структуры. Обновление конфигурации в папке config/...")
+            logger.debug("Обнаружены изменения или новые структуры. Обновление конфигурации в папке config/...")
             self.save_presets_config()
 
 
@@ -672,6 +699,27 @@ class ContourEngine:
             logger.info(f"Миграция успешно завершена. Резервная копия сохранена в {bak_path.name}")
         except Exception as e:
             logger.error(f"Не удалось завершить автоматическую миграцию: {e}")
+
+    def load_presets_config_if_changed(self) -> None:
+        """
+        Перезагружает конфигурацию и лицензии, только если файлы в папке config/ изменились на диске.
+        Это предотвращает избыточное чтение диска и обеспечивает динамическую синхронизацию
+        между GUI сервера и процессом FastAPI.
+        """
+        try:
+            config_dir = Path("config").resolve()
+            licenses_path = config_dir / "licenses.json"
+            
+            # Проверяем mtime для licenses.json
+            mtime = 0.0
+            if licenses_path.exists():
+                mtime = licenses_path.stat().st_mtime
+                
+            if not hasattr(self, "_last_licenses_mtime") or self._last_licenses_mtime != mtime:
+                self._last_licenses_mtime = mtime
+                self.load_presets_config()
+        except Exception as e:
+            logger.debug(f"Ошибка проверки изменения licenses.json: {e}")
 
     def load_presets_config(self) -> None:
         """
@@ -751,7 +799,7 @@ class ContourEngine:
                     with open(p_file, "w", encoding="utf-8") as f:
                         json.dump({"name": name, "organs": organs}, f, ensure_ascii=False, indent=2)
             
-            logger.info("Конфигурация пресетов успешно загружена.")
+            logger.debug("Конфигурация пресетов успешно загружена.")
             
             # Динамическое дополнение до 117 классов TotalSegmentator
             self._update_presets_with_total_classes()
@@ -808,7 +856,7 @@ class ContourEngine:
                 with open(p_file, "w", encoding="utf-8") as f:
                     json.dump(preset_payload, f, ensure_ascii=False, indent=2)
                     
-            logger.info("Конфигурация пресетов успешно сохранена.")
+            logger.debug("Конфигурация пресетов успешно сохранена.")
         except Exception as e:
             logger.error(f"Не удалось сохранить конфигурацию: {e}")
 
@@ -839,6 +887,43 @@ class ContourEngine:
             return bool(torch.cuda.is_available())
         except Exception:
             return False
+
+    @staticmethod
+    def get_gpus_info() -> List[dict]:
+        """
+        Возвращает список видеокарт (GPU) с информацией о названии, объеме памяти,
+        compute capability и совместимости для расчетов.
+        """
+        gpus = []
+        try:
+            import torch
+            if torch.cuda.is_available():
+                num_devices = torch.cuda.device_count()
+                for i in range(num_devices):
+                    name = torch.cuda.get_device_name(i)
+                    properties = torch.cuda.get_device_properties(i)
+                    major, minor = properties.major, properties.minor
+                    memory_gb = properties.total_memory / (1024 ** 3)
+                    
+                    # Проверка совместимости: CC >= 6.0 и память >= 3.8 ГБ
+                    is_compatible = (major >= 6) and (memory_gb >= 3.8)
+                    try:
+                        # Попробуем выделить тестовый тензор для проверки реальной работоспособности
+                        t = torch.zeros(1, device=f"cuda:{i}")
+                        del t
+                    except Exception:
+                        is_compatible = False
+                        
+                    gpus.append({
+                        "index": i,
+                        "name": name,
+                        "memory_gb": round(memory_gb, 1),
+                        "compute_capability": f"{major}.{minor}",
+                        "is_compatible": is_compatible
+                    })
+        except Exception:
+            pass
+        return gpus
 
     @staticmethod
     def get_all_supported_organs() -> List[str]:
@@ -916,7 +1001,8 @@ class ContourEngine:
         step_callback: Optional[Callable[[str], None]] = None,
         progress_callback: Optional[Callable[[int, str], None]] = None,
         is_cancelled_cb: Optional[Callable[[], bool]] = None,
-        register_process_cb: Optional[Callable[[subprocess.Popen], None]] = None
+        register_process_cb: Optional[Callable[[subprocess.Popen], None]] = None,
+        selected_gpu: int = 0
     ) -> Tuple[int, float]:
         """
         Основной пайплайн выполнения автооконтурирования органов риска на КТ.
@@ -1190,6 +1276,10 @@ class ContourEngine:
                     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                     startupinfo.wShowWindow = subprocess.SW_HIDE
                     
+                env = os.environ.copy()
+                if use_gpu:
+                    env["CUDA_VISIBLE_DEVICES"] = str(selected_gpu)
+                
                 process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
@@ -1198,7 +1288,8 @@ class ContourEngine:
                     encoding="utf-8",
                     errors="replace",
                     bufsize=1,
-                    startupinfo=startupinfo
+                    startupinfo=startupinfo,
+                    env=env
                 )
                 
                 if register_process_cb:
