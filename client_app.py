@@ -819,12 +819,33 @@ if PYQT_AVAILABLE:
             QApplication.restoreOverrideCursor()
             
             if not valid:
-                QMessageBox.critical(
+                reply = QMessageBox.question(
                     self,
-                    "Недействительная лицензия ❌",
-                    "Введенный лицензионный ключ недействителен.\n"
-                    "Проверка на сервере TotalSegmentator отклонена. Пожалуйста, убедитесь в правильности ключа."
+                    "Лицензия отклонена или нет сети ❌",
+                    "Проверка на сервере TotalSegmentator не удалась.\n"
+                    "Это может быть вызвано отсутствием интернета, блокировкой сети или истекшим сроком действия ключа.\n\n"
+                    "Вы действительно хотите сохранить этот ключ локально без онлайн-проверки?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
                 )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.engine.licenses = key
+                    self._write_license_to_totalseg_config(key)
+                    
+                    server_url = self.get_server_url()
+                    if server_url:
+                        client_id = self.client_name_edit.text().strip()
+                        headers = {"X-Client-ID": client_id}
+                        try:
+                            import requests
+                            requests.post(f"{server_url}/api/config/licenses", json={"license_key": key}, headers=headers, timeout=5)
+                            self.sync_config_from_server()
+                        except Exception as se:
+                            logger.warning(f"Не удалось отправить лицензию на сервер: {se}")
+                            
+                    self.edit_key.clear()
+                    self.update_status_display()
+                    QMessageBox.information(self, "Успех", "Лицензия сохранена локально.")
                 return
                 
             # Сохранение валидной лицензии

@@ -825,12 +825,23 @@ if PYQT_AVAILABLE:
             QApplication.restoreOverrideCursor()
             
             if not valid:
-                QMessageBox.critical(
+                reply = QMessageBox.question(
                     self,
-                    "Недействительная лицензия ❌",
-                    "Введенный лицензионный ключ недействителен.\n"
-                    "Проверка на сервере TotalSegmentator отклонена. Пожалуйста, убедитесь в правильности ключа."
+                    "Лицензия отклонена или нет сети ❌",
+                    "Проверка на сервере TotalSegmentator не удалась.\n"
+                    "Это может быть вызвано отсутствием интернета, блокировкой сети или истекшим сроком действия ключа.\n\n"
+                    "Вы действительно хотите сохранить этот ключ локально без онлайн-проверки?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
                 )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.engine.load_presets_config()
+                    self.engine.licenses = key
+                    self.engine.save_presets_config()
+                    self._write_license_to_totalseg_config(key)
+                    self.edit_key.clear()
+                    self.update_status_display()
+                    QMessageBox.information(self, "Успех", "Лицензия сохранена локально.")
                 return
                 
             # Сохранение валидной лицензии
