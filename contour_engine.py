@@ -84,10 +84,11 @@ DEFAULT_PRESETS_DATA = {
             "inferior_vena_cava"
         ],
         "Малый таз (Pelvis)": [
-            "urinary_bladder", "prostate", "sacrum", "hip_left", "hip_right", "femur_left", "femur_right",
+            "body", "spinal_cord", "aorta", "spleen", "kidney_right", "kidney_left", "liver", "stomach",
+            "pancreas", "duodenum", "portal_vein_and_splenic_vein", "small_bowel", "colon",
+            "urinary_bladder", "sacrum", "hip_left", "hip_right", "femur_left", "femur_right",
             "iliac_artery_left", "iliac_artery_right", "iliac_vein_left", "iliac_vein_right",
-            "gluteus_maximus_left", "gluteus_maximus_right", "gluteus_medius_left", "gluteus_medius_right",
-            "gluteus_minimus_left", "gluteus_minimus_right"
+            "iliopsoas_left", "iliopsoas_right", "inferior_vena_cava"
         ],
         "Отделы головного мозга (Brain Structures)": [
             "brain_stem", "cerebellum", "thalamus_left", "thalamus_right",

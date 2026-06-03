@@ -101,7 +101,7 @@ ORGAN_GROUPS = {
         "urinary_bladder", "prostate", "sacrum", "hip_left", "hip_right", "femur_left", "femur_right",
         "iliac_artery_left", "iliac_artery_right", "iliac_vein_left", "iliac_vein_right",
         "gluteus_maximus_left", "gluteus_maximus_right", "gluteus_medius_left", "gluteus_medius_right",
-        "gluteus_minimus_left", "gluteus_minimus_right"
+        "gluteus_minimus_left", "gluteus_minimus_right", "iliopsoas_left", "iliopsoas_right"
     ],
     "Отделы головного мозга (Brain Structures)": [
         "brain_stem", "cerebellum", "thalamus_left", "thalamus_right",
