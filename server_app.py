@@ -4979,7 +4979,6 @@ if PYQT_AVAILABLE:
                     self.engine.colors[organ] = color
                 
                 # Сохраняем в конфигурационные файлы config/
-                self.engine.load_presets_config()
                 self.engine.save_presets_config()
                 
                 # Обновляем все иконки в списке с временной блокировкой сигналов
