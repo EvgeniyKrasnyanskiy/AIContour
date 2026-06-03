@@ -61,20 +61,24 @@ try:
         def run(self):
             import requests
             try:
-                url = "https://api.github.com/repos/EvgeniyKrasnyanskiy/AIContour/releases/latest"
-                headers = {"User-Agent": "AIContour-Client-Update-Checker"}
-                response = requests.get(url, headers=headers, timeout=5)
+                # Используем публичный URL с редиректом, чтобы избежать лимитов GitHub API (Rate Limiting)
+                url = "https://github.com/EvgeniyKrasnyanskiy/AIContour/releases/latest"
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+                response = requests.get(url, headers=headers, timeout=5, allow_redirects=True)
+                
                 if response.status_code == 200:
-                    data = response.json()
-                    tag_name = data.get("tag_name", "").strip()
-                    html_url = data.get("html_url", "https://github.com/EvgeniyKrasnyanskiy/AIContour/releases")
-                    latest_version = tag_name.lstrip('v')
-                    self.finished_signal.emit(True, latest_version, html_url, "")
+                    final_url = response.url
+                    if "/releases/tag/" in final_url:
+                        tag_name = final_url.split("/releases/tag/")[-1].strip()
+                        latest_version = tag_name.lstrip('v')
+                        self.finished_signal.emit(True, latest_version, final_url, "")
+                    else:
+                        self.finished_signal.emit(False, "", "", "Не удалось определить версию из ответа GitHub")
                 else:
                     self.finished_signal.emit(False, "", "", f"Ошибка сервера GitHub: {response.status_code}")
             except requests.exceptions.RequestException:
                 # Безопасно обрабатываем отсутствие интернета
-                self.finished_signal.emit(False, "", "", "Нет подключения к интернету или сервер обновлений недоступен")
+                self.finished_signal.emit(False, "", "", "Нет подключения к интернету или сервер недоступен")
             except Exception as e:
                 self.finished_signal.emit(False, "", "", f"Ошибка: {str(e)}")
 
