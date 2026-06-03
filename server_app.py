@@ -3738,6 +3738,8 @@ if PYQT_AVAILABLE:
 
         def on_show_structures_toggled(self, state: int):
             if state == 2:  # Qt.CheckState.Checked
+                if hasattr(self, 'tab_widget'):
+                    self.tab_widget.setCurrentIndex(0)
                 # Предупреждение при просмотре во время сегментации на CPU
                 if (hasattr(self, 'active_workers') and any(w.isRunning() for w in self.active_workers)
                         and hasattr(self, 'radio_cpu') and self.radio_cpu.isChecked()):
