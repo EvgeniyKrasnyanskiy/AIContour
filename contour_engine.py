@@ -495,8 +495,10 @@ class ContourEngine:
                 continue
             full_total_preset.append(org)
             if org not in self.ru_names or self.ru_names[org] == org:
-                self.ru_names[org] = self.translate_organ_to_ru(org)
-                changed = True
+                new_val = self.translate_organ_to_ru(org)
+                if self.ru_names.get(org) != new_val:
+                    self.ru_names[org] = new_val
+                    changed = True
             if org not in self.colors:
                 self.colors[org] = self._get_default_color(org)
                 changed = True
@@ -506,8 +508,10 @@ class ContourEngine:
             # Проверяем, если значение совпадает с ключом ИЛИ не содержит ни одной кириллической буквы (остался латинский дубль)
             has_cyrillic = any(u'\u0400' <= char <= u'\u04FF' for char in self.ru_names[org])
             if self.ru_names[org] == org or not has_cyrillic:
-                self.ru_names[org] = self.translate_organ_to_ru(org)
-                changed = True
+                new_val = self.translate_organ_to_ru(org)
+                if self.ru_names[org] != new_val:
+                    self.ru_names[org] = new_val
+                    changed = True
 
         # Гарантируем переводы и дефолтные цвета для всех структур, объявленных в ORGAN_GROUPS из config
         from config import ORGAN_GROUPS
@@ -515,8 +519,10 @@ class ContourEngine:
             for org in organs:
                 has_cyrillic_org = org in self.ru_names and any(u'\u0400' <= char <= u'\u04FF' for char in self.ru_names[org])
                 if org not in self.ru_names or self.ru_names[org] == org or not has_cyrillic_org:
-                    self.ru_names[org] = self.translate_organ_to_ru(org)
-                    changed = True
+                    new_val = self.translate_organ_to_ru(org)
+                    if self.ru_names.get(org) != new_val:
+                        self.ru_names[org] = new_val
+                        changed = True
                 if org not in self.colors:
                     self.colors[org] = self._get_default_color(org)
                     changed = True
@@ -613,7 +619,7 @@ class ContourEngine:
                 changed = True
 
         if changed:
-            logger.info("Обнаружены изменения или новые структуры. Обновление конфигурации в папке config/...")
+            logger.debug("Обнаружены изменения или новые структуры. Обновление конфигурации в папке config/...")
             self.save_presets_config()
 
 
@@ -791,7 +797,7 @@ class ContourEngine:
                     with open(p_file, "w", encoding="utf-8") as f:
                         json.dump({"name": name, "organs": organs}, f, ensure_ascii=False, indent=2)
             
-            logger.info("Конфигурация пресетов успешно загружена.")
+            logger.debug("Конфигурация пресетов успешно загружена.")
             
             # Динамическое дополнение до 117 классов TotalSegmentator
             self._update_presets_with_total_classes()
@@ -848,7 +854,7 @@ class ContourEngine:
                 with open(p_file, "w", encoding="utf-8") as f:
                     json.dump(preset_payload, f, ensure_ascii=False, indent=2)
                     
-            logger.info("Конфигурация пресетов успешно сохранена.")
+            logger.debug("Конфигурация пресетов успешно сохранена.")
         except Exception as e:
             logger.error(f"Не удалось сохранить конфигурацию: {e}")
 
