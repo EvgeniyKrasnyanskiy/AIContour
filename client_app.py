@@ -311,6 +311,8 @@ if PYQT_AVAILABLE:
                     color = "#ff6b6b"
                 elif record.levelno == logging.WARNING:
                     color = "#f1c40f"
+                elif record.name == "ElektaMod":
+                    color = "#00ffd0"
                 else:
                     color = "#a0a0a2"
                 self.signaler.log_signal.emit(msg, color)
@@ -4820,7 +4822,7 @@ if PYQT_AVAILABLE:
                     from elekta_mod import ElektaManager
                     self.elekta_manager = ElektaManager(
                         output_dir="DICOM",
-                        log_callback=lambda msg: self.append_log(msg, "#00ffd0")
+                        log_callback=None
                     )
                 
                 # Считываем настройки из полей ввода
@@ -5290,8 +5292,36 @@ if PYQT_AVAILABLE:
                             self.activity_timer.stop()
                         
                         if hasattr(self, '_current_active_job_id') and self._current_active_job_id:
-                            final_log = "[INFO]: Сетевой пайплайн успешно завершен!"
-                            self.log_edit.append(f"<br><span style='background-color: #107c41; color: white; font-weight: bold; padding: 4px;'>{final_log}</span><br>")
+                            finished_job = None
+                            for item in filtered_list:
+                                if item.get("job_id") == self._current_active_job_id:
+                                    finished_job = item
+                                    break
+                            
+                            if finished_job:
+                                status = finished_job.get("status")
+                                patient_name = finished_job.get("patient_name", "Неизвестный")
+                                if status == "SUCCESS":
+                                    step_text = finished_job.get("current_step", "")
+                                    count = 0
+                                    match_count = re.search(r'(?:создано|добавлено|структур|oar):\s*(\d+)', step_text.lower())
+                                    if match_count:
+                                        count = int(match_count.group(1))
+                                    elapsed = finished_job.get("elapsed", 0.0)
+                                    final_log = f"[INFO] [{patient_name}]: Пайплайн успешно завершен! Добавлено структур: {count}. Общее время работы: {elapsed:.1f} сек."
+                                    bg_color = "#107c41"
+                                elif status == "CANCELLED":
+                                    final_log = f"[INFO] [{patient_name}]: Задача отменена."
+                                    bg_color = "#d35400"
+                                else:
+                                    err_msg = finished_job.get("current_step", "Сбой")
+                                    final_log = f"[ERROR] [{patient_name}]: Сбой оконтурирования: {err_msg}"
+                                    bg_color = "#c0392b"
+                            else:
+                                final_log = "[INFO]: Сетевой пайплайн успешно завершен!"
+                                bg_color = "#107c41"
+                                
+                            self.log_edit.append(f"<br><span style='background-color: {bg_color}; color: white; font-weight: bold; padding: 4px;'>{final_log}</span><br>")
                             self._current_active_job_id = None
                             self.last_client_log_index = 0
 

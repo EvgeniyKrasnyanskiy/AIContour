@@ -17,6 +17,9 @@ from PyQt6.QtCore import QObject, pyqtSignal, QThread
 from pydicom import dcmread
 from pynetdicom import AE, evt, StoragePresentationContexts
 
+# Подавление системного шума pynetdicom
+logging.getLogger('pynetdicom').setLevel(logging.WARNING)
+
 # Настройка логирования
 logger = logging.getLogger("ElektaMod")
 logger.setLevel(logging.INFO)
@@ -174,8 +177,6 @@ class DicomSenderThread(QThread):
                     ds = dcmread(file_path)
                     filename = os.path.basename(file_path)
                     
-                    self.progress_signal.emit(idx + 1, total_files, filename)
-                    
                     status = assoc.send_c_store(ds)
                     
                     if status and getattr(status, 'Status', None) == 0x0000:
@@ -291,8 +292,6 @@ class ElektaManager:
 
         if progress_callback:
             self.sender_thread.progress_signal.connect(progress_callback)
-        else:
-            self.sender_thread.progress_signal.connect(lambda cur, tot, name: self._log(f"Экспорт [{cur}/{tot}]: {name}"))
 
         if finished_callback:
             self.sender_thread.finished_signal.connect(finished_callback)
