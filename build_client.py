@@ -128,6 +128,7 @@ def build_executable(has_icon):
         "--onefile",
         "--windowed",
         "--add-data=app_icon.png;.",
+        "--add-data=version.txt;.",
         "--name=AIContourClient",
     ]
     
@@ -215,10 +216,44 @@ def package_portable_zip():
     print(f"[OK] Портативный ZIP-архив успешно создан: {zip_filename.resolve()}")
     print(f"Размер архива: {round(zip_filename.stat().st_size / (1024 * 1024), 2)} МБ")
 
+def increment_version():
+    print_banner("0. Обновление версии клиента")
+    version_file = Path("version.txt")
+    current_version = "2.0.0"
+    
+    if version_file.exists():
+        try:
+            current_version = version_file.read_text(encoding="utf-8").strip()
+        except Exception as e:
+            print(f"[WARNING] Не удалось прочитать version.txt: {e}. Будет использована версия 2.0.0")
+            
+    # Разбираем версию
+    try:
+        parts = current_version.split(".")
+        if len(parts) == 3:
+            major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
+            patch += 1
+            new_version = f"{major}.{minor}.{patch}"
+        else:
+            new_version = "2.0.1"
+    except Exception:
+        new_version = "2.0.1"
+        
+    try:
+        version_file.write_text(new_version, encoding="utf-8")
+        print(f"[OK] Версия обновлена: {current_version} -> {new_version}")
+        return new_version
+    except Exception as e:
+        print(f"[ERROR] Не удалось сохранить новую версию в version.txt: {e}")
+        return current_version
+
 def main():
     try:
         # Убедимся, что рабочая директория — это корень проекта
         os.chdir(Path(__file__).parent.resolve())
+        
+        # Обновляем версию клиента
+        increment_version()
         
         check_and_install_dependencies()
         has_icon = generate_ico_icon()

@@ -50,6 +50,34 @@ try:
     from src.ui.styles import StyleManager
     from src.network.api_client import NetworkStatusWorker
     
+    class UpdateCheckerThread(QThread):
+        """Поток для асинхронной фоновой проверки обновлений на GitHub."""
+        finished_signal = pyqtSignal(bool, str, str, str)
+        
+        def __init__(self, current_version: str):
+            super().__init__()
+            self.current_version = current_version
+            
+        def run(self):
+            import requests
+            try:
+                url = "https://api.github.com/repos/EvgeniyKrasnyanskiy/AIContour/releases/latest"
+                headers = {"User-Agent": "AIContour-Client-Update-Checker"}
+                response = requests.get(url, headers=headers, timeout=5)
+                if response.status_code == 200:
+                    data = response.json()
+                    tag_name = data.get("tag_name", "").strip()
+                    html_url = data.get("html_url", "https://github.com/EvgeniyKrasnyanskiy/AIContour/releases")
+                    latest_version = tag_name.lstrip('v')
+                    self.finished_signal.emit(True, latest_version, html_url, "")
+                else:
+                    self.finished_signal.emit(False, "", "", f"Ошибка сервера GitHub: {response.status_code}")
+            except requests.exceptions.RequestException:
+                # Безопасно обрабатываем отсутствие интернета
+                self.finished_signal.emit(False, "", "", "Нет подключения к интернету или сервер обновлений недоступен")
+            except Exception as e:
+                self.finished_signal.emit(False, "", "", f"Ошибка: {str(e)}")
+
     class OrganIndentDelegate(QStyledItemDelegate):
         """Делегат для смещения не-header элементов (чекбокс + иконка + текст) списка органов вправо."""
         def __init__(self, parent=None):
@@ -1824,6 +1852,26 @@ if PYQT_AVAILABLE:
             self.sound_check = QCheckBox("🔔 Воспроизводить звуки")
             self.sound_check.setChecked(True)
             tab2_layout.addWidget(self.sound_check)
+
+            # Группа обновлений
+            update_group = QGroupBox("🔄 Обновление ПО")
+            update_layout = QVBoxLayout(update_group)
+            update_layout.setSpacing(10)
+            
+            self.lbl_current_version = QLabel(f"Текущая версия: <b>{self.get_client_version()}</b>")
+            update_layout.addWidget(self.lbl_current_version)
+            
+            self.btn_check_update = QPushButton("🔄 Проверить наличие обновлений")
+            self.btn_check_update.clicked.connect(self.check_for_updates_clicked)
+            update_layout.addWidget(self.btn_check_update)
+            
+            self.lbl_update_status = QLabel("")
+            self.lbl_update_status.setWordWrap(True)
+            self.lbl_update_status.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
+            self.lbl_update_status.setStyleSheet("color: #7f8c8d; font-style: italic;")
+            update_layout.addWidget(self.lbl_update_status)
+            
+            tab2_layout.addWidget(update_group)
             
             tab2_layout.addStretch()
             tab2_scroll.setWidget(tab2_widget)
@@ -2353,6 +2401,59 @@ if PYQT_AVAILABLE:
                     winsound.Beep(523, 150)
                 except Exception:
                     pass
+
+        def get_client_version(self) -> str:
+            import sys
+            from pathlib import Path
+            if getattr(sys, 'frozen', False):
+                base_dir = Path(sys._MEIPASS)
+            else:
+                base_dir = Path(__file__).parent.resolve()
+            
+            version_file = base_dir / "version.txt"
+            if version_file.exists():
+                try:
+                    return version_file.read_text(encoding="utf-8").strip()
+                except Exception:
+                    pass
+            return "2.0.0"
+            
+        def check_for_updates_clicked(self):
+            self.btn_check_update.setEnabled(False)
+            self.lbl_update_status.setText("Проверка обновлений...")
+            self.lbl_update_status.setStyleSheet("color: #7f8c8d; font-style: italic;")
+            
+            self.update_thread = UpdateCheckerThread(self.get_client_version())
+            self.update_thread.finished_signal.connect(self.on_update_check_finished)
+            self.update_thread.start()
+            
+        def on_update_check_finished(self, success: bool, latest_version: str, release_url: str, error_msg: str):
+            self.btn_check_update.setEnabled(True)
+            if not success:
+                self.lbl_update_status.setText(f"Проверка не удалась: {error_msg}")
+                self.lbl_update_status.setStyleSheet("color: #e74c3c;")
+                return
+                
+            current = self.get_client_version()
+            
+            try:
+                curr_parts = [int(x) for x in current.split(".")]
+                late_parts = [int(x) for x in latest_version.split(".")]
+                while len(curr_parts) < 3: curr_parts.append(0)
+                while len(late_parts) < 3: late_parts.append(0)
+                has_new = late_parts > curr_parts
+            except Exception:
+                has_new = latest_version != current
+                
+            if has_new:
+                self.lbl_update_status.setText(
+                    f"Доступна новая версия: <b style='color: #2ecc71;'>v{latest_version}</b> (установлена v{current}).<br>"
+                    f"<a href='{release_url}' style='color: #3498db; text-decoration: underline;'>Скачать обновление на GitHub</a>"
+                )
+                self.lbl_update_status.setStyleSheet("")
+            else:
+                self.lbl_update_status.setText("У вас установлена последняя версия приложения.")
+                self.lbl_update_status.setStyleSheet("color: #2ecc71;")
 
         def init_presets_and_organs(self):
             """Инициализирует комбобокс пресетов и список органов из конфигурации config/."""
