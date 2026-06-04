@@ -120,7 +120,7 @@ DEFAULT_PRESETS_DATA = {
         "adrenal_gland_left": [255, 87, 34],
         "adrenal_gland_right": [255, 112, 67],
         "pulmonary_artery": [0, 150, 255],
-        "small_bowel": [103, 58, 183],
+        "small_bowel": [0, 0, 255],
         "prostate": [233, 30, 99],
         "rectum": [121, 85, 72],
         "colon": [0, 121, 107],
