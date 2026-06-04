@@ -39,7 +39,7 @@ try:
         QLabel, QLineEdit, QPushButton, QComboBox, QListWidget, QListWidgetItem,
         QRadioButton, QButtonGroup, QTextEdit, QProgressBar, QFileDialog,
         QMessageBox, QFrame, QSplitter, QCheckBox, QDialog, QTextBrowser,
-        QTabWidget, QColorDialog, QGroupBox,
+        QTabWidget, QColorDialog, QGroupBox, QSizePolicy,
         QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QMenu,
         QProgressDialog, QScrollArea, QGridLayout, QStyledItemDelegate, QStyleOptionViewItem
     )
@@ -1596,6 +1596,7 @@ if PYQT_AVAILABLE:
 
             # Инициализация вычислительного движка
             self.engine = ContourEngine()
+            self.global_colors = self.engine.colors.copy()
             self.stats_manager = StatisticsManager()
 
             # Настройка перенаправления логов в реальном времени
@@ -2622,6 +2623,11 @@ if PYQT_AVAILABLE:
                     winsound.Beep(523, 150)
                 except Exception:
                     pass
+
+        def load_presets_config(self):
+            """Загружает конфигурацию движка и обновляет копию global_colors."""
+            self.engine.load_presets_config()
+            self.global_colors = self.engine.colors.copy()
 
         def init_presets_and_organs(self):
             """Инициализирует комбобокс пресетов и список органов из конфигурации config/."""
@@ -4576,11 +4582,10 @@ if PYQT_AVAILABLE:
 
             # Подтягиваем индивидуальные цвета для пользовательского пресета при автоподборе
             if matched in self.engine.preset_colors:
-                self.engine.load_presets_config()
+                self.load_presets_config()
                 preset_colors = self.engine.preset_colors[matched]
                 for org, rgb in preset_colors.items():
                     self.engine.colors[org] = rgb
-                self.engine.save_presets_config()
                 
                 # Обновляем все иконки цветов в списке self.organs_list
                 for i in range(self.organs_list.count()):
@@ -4608,15 +4613,20 @@ if PYQT_AVAILABLE:
 
             # Возвращаем цвета к глобальной палитре при выборе системного пресета
             if preset_name in DEFAULT_PRESET_NAMES or preset_name in ["— Выберите пресет —", "Все органы (All)"]:
-                if hasattr(self, 'color_preset_combo'):
-                    self.on_color_preset_changed(self.color_preset_combo.currentText())
+                if hasattr(self, 'global_colors') and self.global_colors:
+                    self.engine.colors = self.global_colors.copy()
+                    # Обновляем все иконки цветов в списке self.organs_list
+                    for i in range(self.organs_list.count()):
+                        item = self.organs_list.item(i)
+                        organ_name = item.data(Qt.ItemDataRole.UserRole)
+                        if organ_name != "header":
+                            self.update_item_color_icon(item, organ_name)
             # Подтягиваем индивидуальные цвета для пользовательского пресета
             elif preset_name in self.engine.preset_colors:
-                self.engine.load_presets_config()
+                self.load_presets_config()
                 preset_colors = self.engine.preset_colors[preset_name]
                 for org, rgb in preset_colors.items():
                     self.engine.colors[org] = rgb
-                self.engine.save_presets_config()
                 
                 # Обновляем все иконки цветов в списке self.organs_list
                 for i in range(self.organs_list.count()):
@@ -4919,7 +4929,13 @@ if PYQT_AVAILABLE:
             
             if new_color.isValid():
                 new_rgb = [new_color.red(), new_color.green(), new_color.blue()]
+                
+                # 1. Сначала загружаем актуальный конфиг, чтобы не потерять другие изменения
+                self.load_presets_config()
+                
+                # 2. Только после этого вносим изменения
                 self.engine.colors[organ_name] = new_rgb
+                self.global_colors[organ_name] = new_rgb
                 
                 # Принудительно отмечаем этот орган галочкой, так как пользователь настраивает его цвет!
                 item.setCheckState(Qt.CheckState.Checked)
@@ -4942,7 +4958,7 @@ if PYQT_AVAILABLE:
                         self.engine.preset_colors[current_preset] = {}
                     self.engine.preset_colors[current_preset][organ_name] = new_rgb
                 
-                self.engine.load_presets_config()
+                # 3. Сохраняем обновленный конфиг
                 self.engine.save_presets_config()
                 
                 # Обновляем иконку
@@ -4965,8 +4981,8 @@ if PYQT_AVAILABLE:
             """Слот изменения цветового пресета."""
             # Наборы пресетов
             preset_palettes = {
-                "Классический": {"spleen": [156, 39, 176], "kidney_right": [3, 169, 244], "kidney_left": [33, 150, 243], "gallbladder": [76, 175, 80], "liver": [139, 195, 74], "stomach": [255, 152, 0], "aorta": [244, 67, 54], "inferior_vena_cava": [63, 81, 181], "urinary_bladder": [255, 235, 59], "heart": [233, 30, 99], "lung_left": [0, 150, 136], "lung_right": [0, 188, 212], "lungs": [0, 172, 193], "trachea": [121, 85, 72], "esophagus": [158, 158, 158], "pancreas": [255, 193, 7], "duodenum": [173, 20, 87], "adrenal_gland_left": [255, 87, 34], "adrenal_gland_right": [255, 112, 67], "pulmonary_artery": [0, 150, 255], "small_bowel": [103, 58, 183], "prostate": [233, 30, 99], "rectum": [121, 85, 72], "colon": [0, 121, 107], "femur_left": [255, 224, 178], "femur_right": [255, 224, 178], "hip_left": [230, 238, 156], "hip_right": [230, 238, 156], "sacrum": [141, 110, 99], "spinal_cord": [0, 255, 0], "thyroid_gland": [255, 105, 180], "skull": [255, 228, 196], "brain": [135, 206, 250], "common_carotid_artery_left": [220, 20, 60], "common_carotid_artery_right": [220, 20, 60], "superior_vena_cava": [70, 130, 180], "portal_vein_and_splenic_vein": [0, 139, 139], "clavicula_left": [244, 164, 96], "clavicula_right": [244, 164, 96], "sternum": [222, 184, 135], "iliac_artery_left": [255, 99, 71], "iliac_artery_right": [255, 99, 71], "eye_left": [255, 255, 0], "eye_right": [255, 255, 0], "lens_left": [255, 165, 0], "lens_right": [255, 165, 0], "brain_stem": [210, 105, 30], "optic_nerve_left": [240, 230, 140], "optic_nerve_right": [240, 230, 140]},
-                "Цвета QUANTEC": {"spleen": [160, 32, 240], "kidney_right": [0, 0, 255], "kidney_left": [30, 144, 255], "gallbladder": [0, 255, 0], "liver": [34, 139, 34], "stomach": [218, 165, 32], "aorta": [55, 197, 94], "inferior_vena_cava": [194, 166, 130], "urinary_bladder": [255, 215, 0], "heart": [255, 0, 0], "lung_left": [86, 123, 174], "lung_right": [195, 54, 110], "lungs": [140, 88, 142], "trachea": [149, 58, 171], "esophagus": [138, 127, 103], "pancreas": [153, 97, 184], "duodenum": [168, 85, 61], "adrenal_gland_left": [114, 125, 152], "adrenal_gland_right": [161, 157, 200], "pulmonary_artery": [98, 122, 139], "small_bowel": [177, 66, 127], "prostate": [152, 133, 118], "rectum": [139, 69, 19], "colon": [191, 68, 120], "femur_left": [135, 139, 183], "femur_right": [159, 155, 157], "hip_left": [146, 175, 165], "hip_right": [85, 193, 174], "sacrum": [96, 111, 190], "spinal_cord": [116, 98, 57], "thyroid_gland": [113, 52, 117], "skull": [94, 188, 72], "brain": [155, 169, 192], "common_carotid_artery_left": [51, 115, 144], "common_carotid_artery_right": [86, 147, 196], "superior_vena_cava": [84, 137, 160], "portal_vein_and_splenic_vein": [113, 127, 112], "clavicula_left": [144, 51, 84], "clavicula_right": [176, 73, 124], "sternum": [85, 68, 152], "iliac_artery_left": [134, 69, 129], "iliac_artery_right": [78, 137, 190], "eye_left": [255, 255, 100], "eye_right": [255, 255, 100], "lens_left": [255, 140, 0], "lens_right": [255, 140, 0], "brain_stem": [139, 69, 19], "optic_nerve_left": [255, 215, 0], "optic_nerve_right": [255, 215, 0]},
+                "Классический": {"spleen": [156, 39, 176], "kidney_right": [3, 169, 244], "kidney_left": [33, 150, 243], "gallbladder": [76, 175, 80], "liver": [139, 195, 74], "stomach": [255, 152, 0], "aorta": [244, 67, 54], "inferior_vena_cava": [63, 81, 181], "urinary_bladder": [255, 235, 59], "heart": [233, 30, 99], "lung_left": [0, 150, 136], "lung_right": [0, 188, 212], "lungs": [0, 172, 193], "trachea": [121, 85, 72], "esophagus": [158, 158, 158], "pancreas": [255, 193, 7], "duodenum": [173, 20, 87], "adrenal_gland_left": [255, 87, 34], "adrenal_gland_right": [255, 112, 67], "pulmonary_artery": [0, 150, 255], "small_bowel": [0, 0, 255], "prostate": [233, 30, 99], "rectum": [121, 85, 72], "colon": [0, 121, 107], "femur_left": [255, 224, 178], "femur_right": [255, 224, 178], "hip_left": [230, 238, 156], "hip_right": [230, 238, 156], "sacrum": [141, 110, 99], "spinal_cord": [0, 255, 0], "thyroid_gland": [255, 105, 180], "skull": [255, 228, 196], "brain": [135, 206, 250], "common_carotid_artery_left": [220, 20, 60], "common_carotid_artery_right": [220, 20, 60], "superior_vena_cava": [70, 130, 180], "portal_vein_and_splenic_vein": [0, 139, 139], "clavicula_left": [244, 164, 96], "clavicula_right": [244, 164, 96], "sternum": [222, 184, 135], "iliac_artery_left": [255, 99, 71], "iliac_artery_right": [255, 99, 71], "eye_left": [255, 255, 0], "eye_right": [255, 255, 0], "lens_left": [255, 165, 0], "lens_right": [255, 165, 0], "brain_stem": [210, 105, 30], "optic_nerve_left": [240, 230, 140], "optic_nerve_right": [240, 230, 140]},
+                "Цвета QUANTEC": {"spleen": [160, 32, 240], "kidney_right": [0, 0, 255], "kidney_left": [30, 144, 255], "gallbladder": [0, 255, 0], "liver": [34, 139, 34], "stomach": [218, 165, 32], "aorta": [55, 197, 94], "inferior_vena_cava": [194, 166, 130], "urinary_bladder": [255, 215, 0], "heart": [255, 0, 0], "lung_left": [86, 123, 174], "lung_right": [195, 54, 110], "lungs": [140, 88, 142], "trachea": [149, 58, 171], "esophagus": [138, 127, 103], "pancreas": [153, 97, 184], "duodenum": [168, 85, 61], "adrenal_gland_left": [114, 125, 152], "adrenal_gland_right": [161, 157, 200], "pulmonary_artery": [98, 122, 139], "small_bowel": [0, 0, 255], "prostate": [152, 133, 118], "rectum": [139, 69, 19], "colon": [191, 68, 120], "femur_left": [135, 139, 183], "femur_right": [159, 155, 157], "hip_left": [146, 175, 165], "hip_right": [85, 193, 174], "sacrum": [96, 111, 190], "spinal_cord": [116, 98, 57], "thyroid_gland": [113, 52, 117], "skull": [94, 188, 72], "brain": [155, 169, 192], "common_carotid_artery_left": [51, 115, 144], "common_carotid_artery_right": [86, 147, 196], "superior_vena_cava": [84, 137, 160], "portal_vein_and_splenic_vein": [113, 127, 112], "clavicula_left": [144, 51, 84], "clavicula_right": [176, 73, 124], "sternum": [85, 68, 152], "iliac_artery_left": [134, 69, 129], "iliac_artery_right": [78, 137, 190], "eye_left": [255, 255, 100], "eye_right": [255, 255, 100], "lens_left": [255, 140, 0], "lens_right": [255, 140, 0], "brain_stem": [139, 69, 19], "optic_nerve_left": [255, 215, 0], "optic_nerve_right": [255, 215, 0]},
                 "Яркий неоновый": {"spleen": [255, 0, 255], "kidney_right": [0, 255, 255], "kidney_left": [0, 191, 255], "gallbladder": [50, 205, 50], "liver": [173, 255, 47], "stomach": [255, 165, 0], "aorta": [255, 255, 0], "inferior_vena_cava": [128, 0, 255], "urinary_bladder": [255, 255, 0], "heart": [255, 20, 147], "lung_left": [255, 0, 255], "lung_right": [255, 0, 255], "lungs": [0, 255, 200], "trachea": [128, 255, 0], "esophagus": [0, 128, 255], "pancreas": [0, 128, 255], "duodenum": [255, 255, 0], "adrenal_gland_left": [255, 255, 0], "adrenal_gland_right": [255, 0, 128], "pulmonary_artery": [0, 128, 255], "small_bowel": [0, 0, 255], "prostate": [255, 0, 0], "rectum": [210, 105, 30], "colon": [0, 128, 255], "femur_left": [0, 255, 128], "femur_right": [128, 255, 0], "hip_left": [128, 0, 255], "hip_right": [0, 0, 255], "sacrum": [255, 0, 255], "spinal_cord": [255, 0, 128], "thyroid_gland": [0, 0, 255], "skull": [255, 0, 0], "brain": [0, 0, 255], "common_carotid_artery_left": [0, 255, 0], "common_carotid_artery_right": [0, 0, 255], "superior_vena_cava": [0, 128, 255], "portal_vein_and_splenic_vein": [0, 255, 0], "clavicula_left": [0, 0, 255], "clavicula_right": [255, 0, 128], "sternum": [0, 255, 0], "iliac_artery_left": [128, 0, 255], "iliac_artery_right": [128, 0, 255], "eye_left": [255, 255, 0], "eye_right": [255, 255, 0], "lens_left": [255, 69, 0], "lens_right": [255, 69, 0], "brain_stem": [255, 105, 180], "optic_nerve_left": [255, 215, 0], "optic_nerve_right": [255, 215, 0]}
             }
 
@@ -4974,6 +4990,7 @@ if PYQT_AVAILABLE:
             if palette:
                 for organ, color in palette.items():
                     self.engine.colors[organ] = color
+                self.global_colors = self.engine.colors.copy()
                 
                 # Сохраняем в конфигурационные файлы config/
                 self.engine.save_presets_config()
@@ -5139,7 +5156,7 @@ if PYQT_AVAILABLE:
                 elif "All" in preset_name or "Все органы" in preset_name:
                     preset_key = "all"
                 else:
-                    preset_key = "custom"
+                    preset_key = preset_name
 
                 # Точность
                 precision_modes = ["normal", "fast", "faster"]
@@ -5464,6 +5481,7 @@ if PYQT_AVAILABLE:
             grid_layout.addWidget(self.card_success, 0, 1)
             grid_layout.addWidget(self.card_fail, 1, 0)
             grid_layout.addWidget(self.card_organs, 1, 1)
+            grid_widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             layout.addWidget(grid_widget)
             
             time_widget = QFrame()
@@ -5486,6 +5504,7 @@ if PYQT_AVAILABLE:
             time_lay.addWidget(self.lbl_stat_total_time)
             time_lay.addStretch()
             time_lay.addWidget(self.lbl_stat_avg_time)
+            time_widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             layout.addWidget(time_widget)
             
             table_lbl = QLabel("🕒 Последние запуски:")
@@ -5528,7 +5547,7 @@ if PYQT_AVAILABLE:
                     border-radius: 6px;
                 }
             """)
-            self.stats_organs_list.setMaximumHeight(140)
+            self.stats_organs_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             layout.addWidget(self.stats_organs_list)
             
             btn_lay = QHBoxLayout()

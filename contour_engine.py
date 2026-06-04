@@ -120,7 +120,7 @@ DEFAULT_PRESETS_DATA = {
         "adrenal_gland_left": [255, 87, 34],
         "adrenal_gland_right": [255, 112, 67],
         "pulmonary_artery": [0, 150, 255],
-        "small_bowel": [103, 58, 183],
+        "small_bowel": [0, 0, 255],
         "prostate": [233, 30, 99],
         "rectum": [121, 85, 72],
         "colon": [0, 121, 107],
@@ -784,7 +784,15 @@ class ContourEngine:
                             if isinstance(preset_data, dict) and "name" in preset_data and "organs" in preset_data:
                                 name = preset_data["name"]
                                 self.presets[name] = preset_data["organs"]
-                                if "colors" in preset_data and isinstance(preset_data["colors"], dict):
+                                is_system = name in {
+                                    "Голова и шея (Head & Neck)",
+                                    "Грудная клетка (Thorax)",
+                                    "Брюшная полость (Abdomen)",
+                                    "Малый таз (Pelvis)",
+                                    "Отделы головного мозга (Brain Structures)",
+                                    "Остальное"
+                                }
+                                if not is_system and "colors" in preset_data and isinstance(preset_data["colors"], dict):
                                     self.preset_colors[name] = preset_data["colors"]
                     except Exception as pe:
                         logger.error(f"Ошибка при загрузке пресета {p_file.name}: {pe}")
@@ -850,7 +858,15 @@ class ContourEngine:
                     "name": name,
                     "organs": organs
                 }
-                if name in self.preset_colors:
+                is_system = name in {
+                    "Голова и шея (Head & Neck)",
+                    "Грудная клетка (Thorax)",
+                    "Брюшная полость (Abdomen)",
+                    "Малый таз (Pelvis)",
+                    "Отделы головного мозга (Brain Structures)",
+                    "Остальное"
+                }
+                if not is_system and name in self.preset_colors:
                     preset_payload["colors"] = self.preset_colors[name]
                     
                 with open(p_file, "w", encoding="utf-8") as f:
@@ -1698,7 +1714,11 @@ class ContourEngine:
                         logger.info(f"Пропуск пустого органа: {organ_name} (отсутствует в КТ объеме после постобработки)")
                         continue
                         
-                    color = self.colors.get(organ_name, [128, 128, 128])
+                    color = None
+                    if preset_name and preset_name in self.preset_colors:
+                        color = self.preset_colors[preset_name].get(organ_name)
+                    if color is None:
+                        color = self.colors.get(organ_name, [128, 128, 128])
                     
                     # Локализация ROI строго на английском согласно ТЗ
                     # Определяем имена ROI
