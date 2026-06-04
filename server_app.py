@@ -39,7 +39,7 @@ try:
         QLabel, QLineEdit, QPushButton, QComboBox, QListWidget, QListWidgetItem,
         QRadioButton, QButtonGroup, QTextEdit, QProgressBar, QFileDialog,
         QMessageBox, QFrame, QSplitter, QCheckBox, QDialog, QTextBrowser,
-        QTabWidget, QColorDialog, QGroupBox,
+        QTabWidget, QColorDialog, QGroupBox, QSizePolicy,
         QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QMenu,
         QProgressDialog, QScrollArea, QGridLayout, QStyledItemDelegate, QStyleOptionViewItem
     )
@@ -5481,6 +5481,7 @@ if PYQT_AVAILABLE:
             grid_layout.addWidget(self.card_success, 0, 1)
             grid_layout.addWidget(self.card_fail, 1, 0)
             grid_layout.addWidget(self.card_organs, 1, 1)
+            grid_widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             layout.addWidget(grid_widget)
             
             time_widget = QFrame()
@@ -5503,6 +5504,7 @@ if PYQT_AVAILABLE:
             time_lay.addWidget(self.lbl_stat_total_time)
             time_lay.addStretch()
             time_lay.addWidget(self.lbl_stat_avg_time)
+            time_widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             layout.addWidget(time_widget)
             
             table_lbl = QLabel("🕒 Последние запуски:")
@@ -5545,7 +5547,7 @@ if PYQT_AVAILABLE:
                     border-radius: 6px;
                 }
             """)
-            self.stats_organs_list.setMaximumHeight(140)
+            self.stats_organs_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             layout.addWidget(self.stats_organs_list)
             
             btn_lay = QHBoxLayout()
