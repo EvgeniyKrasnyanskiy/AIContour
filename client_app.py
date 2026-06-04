@@ -1398,6 +1398,7 @@ if PYQT_AVAILABLE:
 
             # Инициализация вычислительного движка
             self.engine = ContourEngine()
+            self.global_colors = self.engine.colors.copy()
             self.stats_manager = StatisticsManager()
 
             # Настройка перенаправления логов в реальном времени
@@ -2953,6 +2954,7 @@ if PYQT_AVAILABLE:
                     self.engine.presets = data.get("presets", {})
                     self.engine.preset_colors = data.get("preset_colors", {})
                     self.engine.colors = data.get("colors", {})
+                    self.global_colors = self.engine.colors.copy()
                     self.engine.ru_names = data.get("ru_names", {})
                     self.engine.licenses = data.get("licenses", "")
                     
@@ -4581,7 +4583,6 @@ if PYQT_AVAILABLE:
                 preset_colors = self.engine.preset_colors[matched]
                 for org, rgb in preset_colors.items():
                     self.engine.colors[org] = rgb
-                self.engine.save_presets_config()
                 
                 # Обновляем все иконки цветов в списке self.organs_list
                 for i in range(self.organs_list.count()):
@@ -4609,14 +4610,19 @@ if PYQT_AVAILABLE:
 
             # Возвращаем цвета к глобальной палитре при выборе системного пресета
             if preset_name in DEFAULT_PRESET_NAMES or preset_name in ["— Выберите пресет —", "Все органы (All)"]:
-                if hasattr(self, 'color_preset_combo'):
-                    self.on_color_preset_changed(self.color_preset_combo.currentText())
+                if hasattr(self, 'global_colors') and self.global_colors:
+                    self.engine.colors = self.global_colors.copy()
+                    # Обновляем все иконки цветов в списке self.organs_list
+                    for i in range(self.organs_list.count()):
+                        item = self.organs_list.item(i)
+                        organ_name = item.data(Qt.ItemDataRole.UserRole)
+                        if organ_name != "header":
+                            self.update_item_color_icon(item, organ_name)
             # Подтягиваем индивидуальные цвета для пользовательского пресета
             elif preset_name in self.engine.preset_colors:
                 preset_colors = self.engine.preset_colors[preset_name]
                 for org, rgb in preset_colors.items():
                     self.engine.colors[org] = rgb
-                self.engine.save_presets_config()
                 
                 # Обновляем все иконки цветов в списке self.organs_list
                 for i in range(self.organs_list.count()):
@@ -4921,6 +4927,8 @@ if PYQT_AVAILABLE:
             if new_color.isValid():
                 new_rgb = [new_color.red(), new_color.green(), new_color.blue()]
                 self.engine.colors[organ_name] = new_rgb
+                if hasattr(self, 'global_colors'):
+                    self.global_colors[organ_name] = new_rgb
                 
                 # Принудительно отмечаем этот орган галочкой, так как пользователь настраивает его цвет!
                 item.setCheckState(Qt.CheckState.Checked)
@@ -5008,6 +5016,8 @@ if PYQT_AVAILABLE:
             if palette:
                 for organ, color in palette.items():
                     self.engine.colors[organ] = color
+                if hasattr(self, 'global_colors'):
+                    self.global_colors = self.engine.colors.copy()
                 
                 # Отправляем новую цветовую гамму на сервер по сети
                 server_url = self.get_server_url()
@@ -5243,7 +5253,7 @@ if PYQT_AVAILABLE:
                 elif "All" in preset_name or "Все органы" in preset_name:
                     preset_key = "all"
                 else:
-                    preset_key = "custom"
+                    preset_key = preset_name
 
                 # Точность
                 precision_modes = ["normal", "fast", "faster"]
