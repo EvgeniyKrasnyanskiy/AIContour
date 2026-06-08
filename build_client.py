@@ -126,7 +126,7 @@ def build_executable(has_icon):
         pyinstaller_bin,
         "--noconfirm",
         "--onefile",
-        "--windowed",
+        "--console",
         "--add-data=app_icon.png;.",
         "--add-data=version.txt;.",
         "--name=AIContourClient",

@@ -23,6 +23,7 @@ import sys
 # Форсируем софтверный рендеринг для стабильного запуска на RDP и виртуальных машинах
 os.environ["QT_OPENGL"] = "software"
 os.environ["QT_QUICK_BACKEND"] = "software"
+os.environ["QT_DEBUG_PLUGINS"] = "1"
 
 import gc
 import shutil
