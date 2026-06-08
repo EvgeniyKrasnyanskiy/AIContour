@@ -241,6 +241,14 @@ def package_portable_zip():
             shutil.copy2(dll_filepath, package_dir / dll)
         else:
             print(f"[WARNING] DLL {dll} не найдена в {system32_path}!")
+            
+    # Копируем opengl32sw.dll из venv прямо в портативную папку для софтверного рендеринга на серверах/RDP
+    venv_opengl = Path("venv") / "Lib" / "site-packages" / "PyQt6" / "Qt6" / "bin" / "opengl32sw.dll"
+    if venv_opengl.exists():
+        print(f"[INFO] Копируем {venv_opengl.name} в портативный каталог...")
+        shutil.copy2(venv_opengl, package_dir / venv_opengl.name)
+    else:
+        print("[WARNING] opengl32sw.dll не найден в venv!")
     
     # 2. Исключаем копирование папки config/, так как клиент получает настройки с сервера.
     # Если на клиенте потребуется записать статистику, StatisticsManager создаст config/ автоматически.
