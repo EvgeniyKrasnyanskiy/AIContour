@@ -300,6 +300,45 @@ def increment_version():
         print(f"[ERROR] Не удалось сохранить новую версию в version.txt: {e}")
         return current_version
 
+def patch_qt6_dll():
+    print_banner("2.5. Патч Qt6Core.dll для совместимости с Windows Server 2016 / старыми Windows 10")
+    
+    # Путь к Qt6Core.dll во внутреннем venv
+    dll_path = Path("venv") / "Lib" / "site-packages" / "PyQt6" / "Qt6" / "bin" / "Qt6Core.dll"
+    if not dll_path.exists():
+        print("[WARNING] Qt6Core.dll не найден по стандартному пути. Пропуск патча.")
+        return
+        
+    try:
+        # Читаем бинарные данные
+        data = dll_path.read_bytes()
+        
+        # Сигнатура вызова SetThreadDescription в kernel32.dll
+        target = b"SetThreadDescription\x00"
+        # Заменяем на SetThreadPriority (которая есть во всех версиях Windows и имеет такую же сигнатуру по регистрам)
+        # Дополняем нулями до такой же длины (21 байт), чтобы не нарушить структуру PE-файла
+        replacement = b"SetThreadPriority\x00\x00\x00\x00"
+        
+        if target in data:
+            print("[INFO] Применяем патч к Qt6Core.dll (SetThreadDescription -> SetThreadPriority)...")
+            # Создаем бэкап
+            backup_path = dll_path.with_suffix(".dll.bak")
+            if not backup_path.exists():
+                shutil.copy2(dll_path, backup_path)
+                print(f"[OK] Создан бэкап: {backup_path.name}")
+                
+            new_data = data.replace(target, replacement)
+            dll_path.write_bytes(new_data)
+            print("[OK] Qt6Core.dll успешно пропатчена для поддержки старых ОС!")
+        else:
+            # Возможно, уже пропатчена
+            if b"SetThreadPriority\x00\x00\x00\x00" in data:
+                print("[INFO] Qt6Core.dll уже содержит патч.")
+            else:
+                print("[WARNING] Не найдена сигнатура SetThreadDescription в Qt6Core.dll. Возможно, версия Qt изменена.")
+    except Exception as e:
+        print(f"[ERROR] Не удалось применить патч к Qt6Core.dll: {e}")
+
 def main():
     try:
         # Убедимся, что рабочая директория — это корень проекта
@@ -309,6 +348,10 @@ def main():
         increment_version()
         
         check_and_install_dependencies()
+        
+        # Применяем патч совместимости с Windows Server 2016 / старыми Windows 10
+        patch_qt6_dll()
+        
         has_icon = generate_ico_icon()
         build_executable(has_icon)
         package_portable_zip()
