@@ -47,6 +47,7 @@ jobs/
 
 # Временные отчеты
 changes_today.txt
+AIC_ToDo.txt
 
 # PyInstaller spec files
 *.spec
