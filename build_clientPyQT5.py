@@ -132,32 +132,8 @@ def build_executable(has_icon):
         "--name=AIContourClient",
     ]
     
-    # Добавляем системные библиотеки VC++ Redistributable и ICU для портативности на чистых Windows системах
-    system32_path = Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32"
-    required_dlls = [
-        "vcruntime140.dll", 
-        "vcruntime140_1.dll",
-        "vcruntime140_threads.dll",
-        "msvcp140.dll", 
-        "msvcp140_1.dll",
-        "msvcp140_2.dll",
-        "msvcp140_atomic_wait.dll",
-        "msvcp140_codecvt_ids.dll",
-        "concrt140.dll",
-        "vcomp140.dll",
-        "icu.dll",
-        "icuin.dll",
-        "icuuc.dll"
-    ]
-    for dll in required_dlls:
-        dll_filepath = system32_path / dll
-        if dll_filepath.exists():
-            print(f"[INFO] Добавляем системную DLL в сборку: {dll}")
-            # Добавляем и в корень (для основного приложения), и в папку Qt (для бинарников PyQt5)
-            args.append(f"--add-binary={dll_filepath};.")
-            args.append(f"--add-binary={dll_filepath};PyQt5/Qt5/bin")
-        else:
-            print(f"[WARNING] Системная DLL {dll} не найдена в {system32_path}!")
+    # Системные библиотеки VC++ Redistributable и ICU не добавляются в PyQt5 сборку
+    pass
 
     # Добавляем иконку, если создана
     if has_icon:
@@ -217,39 +193,8 @@ def package_portable_zip():
     print(f"[INFO] Копируем {exe_file.name} в портативный каталог...")
     shutil.copy2(exe_file, package_dir / exe_file.name)
     
-    # Копируем системные DLL прямо в портативную папку рядом с .exe для обхода приоритета DLL в System32 (Local Deployment)
-    print("[INFO] Копируем системные DLL (MSVC++ и ICU) рядом с .exe для обхода приоритета System32...")
-    system32_path = Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32"
-    required_dlls = [
-        "vcruntime140.dll", 
-        "vcruntime140_1.dll",
-        "vcruntime140_threads.dll",
-        "msvcp140.dll", 
-        "msvcp140_1.dll",
-        "msvcp140_2.dll",
-        "msvcp140_atomic_wait.dll",
-        "msvcp140_codecvt_ids.dll",
-        "concrt140.dll",
-        "vcomp140.dll",
-        "icu.dll",
-        "icuin.dll",
-        "icuuc.dll"
-    ]
-    for dll in required_dlls:
-        dll_filepath = system32_path / dll
-        if dll_filepath.exists():
-            print(f"[INFO] Копируем DLL в портативный каталог: {dll}")
-            shutil.copy2(dll_filepath, package_dir / dll)
-        else:
-            print(f"[WARNING] DLL {dll} не найдена в {system32_path}!")
-            
-    # Копируем opengl32sw.dll из venv прямо в портативную папку для софтверного рендеринга на серверах/RDP
-    venv_opengl = Path("venv") / "Lib" / "site-packages" / "PyQt5" / "Qt5" / "bin" / "opengl32sw.dll"
-    if venv_opengl.exists():
-        print(f"[INFO] Копируем {venv_opengl.name} в портативный каталог...")
-        shutil.copy2(venv_opengl, package_dir / venv_opengl.name)
-    else:
-        print("[WARNING] opengl32sw.dll не найден в venv!")
+    # Копирование системных DLL и opengl32sw.dll в портативный каталог отключено для PyQt5
+    pass
     
     # 2. Исключаем копирование папки config/, так как клиент получает настройки с сервера.
     # Если на клиенте потребуется записать статистику, StatisticsManager создаст config/ автоматически.
