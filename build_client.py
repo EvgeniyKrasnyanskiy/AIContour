@@ -134,7 +134,18 @@ def build_executable(has_icon):
     
     # Добавляем системные библиотеки VC++ Redistributable для портативности на чистых Windows системах
     system32_path = Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32"
-    required_dlls = ["vcruntime140.dll", "msvcp140.dll", "vcruntime140_1.dll"]
+    required_dlls = [
+        "vcruntime140.dll", 
+        "vcruntime140_1.dll",
+        "vcruntime140_threads.dll",
+        "msvcp140.dll", 
+        "msvcp140_1.dll",
+        "msvcp140_2.dll",
+        "msvcp140_atomic_wait.dll",
+        "msvcp140_codecvt_ids.dll",
+        "concrt140.dll",
+        "vcomp140.dll"
+    ]
     for dll in required_dlls:
         dll_filepath = system32_path / dll
         if dll_filepath.exists():
