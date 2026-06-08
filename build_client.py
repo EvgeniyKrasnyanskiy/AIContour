@@ -132,7 +132,7 @@ def build_executable(has_icon):
         "--name=AIContourClient",
     ]
     
-    # Добавляем системные библиотеки VC++ Redistributable для портативности на чистых Windows системах
+    # Добавляем системные библиотеки VC++ Redistributable и ICU для портативности на чистых Windows системах
     system32_path = Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32"
     required_dlls = [
         "vcruntime140.dll", 
@@ -144,13 +144,18 @@ def build_executable(has_icon):
         "msvcp140_atomic_wait.dll",
         "msvcp140_codecvt_ids.dll",
         "concrt140.dll",
-        "vcomp140.dll"
+        "vcomp140.dll",
+        "icu.dll",
+        "icuin.dll",
+        "icuuc.dll"
     ]
     for dll in required_dlls:
         dll_filepath = system32_path / dll
         if dll_filepath.exists():
             print(f"[INFO] Добавляем системную DLL в сборку: {dll}")
+            # Добавляем и в корень (для основного приложения), и в папку Qt (для бинарников PyQt6)
             args.append(f"--add-binary={dll_filepath};.")
+            args.append(f"--add-binary={dll_filepath};PyQt6/Qt6/bin")
         else:
             print(f"[WARNING] Системная DLL {dll} не найдена в {system32_path}!")
 
