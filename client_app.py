@@ -25,6 +25,71 @@ os.environ["QT_OPENGL"] = "software"
 os.environ["QT_QUICK_BACKEND"] = "software"
 os.environ["QT_DEBUG_PLUGINS"] = "1"
 
+# --- ШИМ ДЛЯ СОВМЕСТИМОСТИ PYQT6 -> PYQT5 ---
+os.environ['PYQTGRAPH_QT_LIB'] = 'PyQt5'
+
+try:
+    import PyQt5.QtCore
+    import PyQt5.QtGui
+    import PyQt5.QtWidgets
+
+    # Патчим оригинальные классы PyQt5 для трансляции вложенных перечислений PyQt6
+    for name in [
+        'AlignmentFlag', 'CheckState', 'ContextMenuPolicy', 'Corner',
+        'CursorShape', 'ItemDataRole', 'ItemFlag', 'KeyboardModifier',
+        'Orientation', 'ScrollBarPolicy', 'SortOrder', 'TextInteractionFlag',
+        'WindowModality'
+    ]:
+        if not hasattr(PyQt5.QtCore.Qt, name):
+            setattr(PyQt5.QtCore.Qt, name, PyQt5.QtCore.Qt)
+
+    for name in ['EditTrigger', 'SelectionBehavior', 'SelectionMode']:
+        if not hasattr(PyQt5.QtWidgets.QAbstractItemView, name):
+            setattr(PyQt5.QtWidgets.QAbstractItemView, name, PyQt5.QtWidgets.QAbstractItemView)
+
+    if not hasattr(PyQt5.QtGui.QFont, 'Weight'):
+        setattr(PyQt5.QtGui.QFont, 'Weight', PyQt5.QtGui.QFont)
+        
+    if not hasattr(PyQt5.QtWidgets.QHeaderView, 'ResizeMode'):
+        setattr(PyQt5.QtWidgets.QHeaderView, 'ResizeMode', PyQt5.QtWidgets.QHeaderView)
+        
+    if not hasattr(PyQt5.QtWidgets.QLineEdit, 'EchoMode'):
+        setattr(PyQt5.QtWidgets.QLineEdit, 'EchoMode', PyQt5.QtWidgets.QLineEdit)
+
+    for name in ['ButtonRole', 'Icon', 'StandardButton']:
+        if not hasattr(PyQt5.QtWidgets.QMessageBox, name):
+            setattr(PyQt5.QtWidgets.QMessageBox, name, PyQt5.QtWidgets.QMessageBox)
+
+    for name in ['ColorGroup', 'ColorRole']:
+        if not hasattr(PyQt5.QtGui.QPalette, name):
+            setattr(PyQt5.QtGui.QPalette, name, PyQt5.QtGui.QPalette)
+
+    if not hasattr(PyQt5.QtCore.QSettings, 'Format'):
+        setattr(PyQt5.QtCore.QSettings, 'Format', PyQt5.QtCore.QSettings)
+        
+    if not hasattr(PyQt5.QtWidgets.QSizePolicy, 'Policy'):
+        setattr(PyQt5.QtWidgets.QSizePolicy, 'Policy', PyQt5.QtWidgets.QSizePolicy)
+        
+    if not hasattr(PyQt5.QtGui.QTextCursor, 'MoveOperation'):
+        setattr(PyQt5.QtGui.QTextCursor, 'MoveOperation', PyQt5.QtGui.QTextCursor)
+
+    if not hasattr(PyQt5.QtWidgets.QFrame, 'Shape'):
+        setattr(PyQt5.QtWidgets.QFrame, 'Shape', PyQt5.QtWidgets.QFrame)
+        
+    if not hasattr(PyQt5.QtWidgets.QFrame, 'Shadow'):
+        setattr(PyQt5.QtWidgets.QFrame, 'Shadow', PyQt5.QtWidgets.QFrame)
+
+    # Подменяем модули в sys.modules
+    sys.modules['PyQt6'] = sys.modules.get('PyQt5')
+    sys.modules['PyQt6.QtCore'] = PyQt5.QtCore
+    sys.modules['PyQt6.QtGui'] = PyQt5.QtGui
+    sys.modules['PyQt6.QtWidgets'] = PyQt5.QtWidgets
+except ImportError:
+    # Если PyQt5 не установлен, импорт PyQt6.QtCore упадет дальше,
+    # что вызовет диагностику DLL ниже.
+    pass
+# ---------------------------------------------
+
 import gc
 import shutil
 import time
@@ -66,7 +131,7 @@ except ImportError as e:
                     p_str = str(p).lower()
                     if "vcruntime" in p_str or "msvcp" in p_str or "concrt" in p_str or "icu" in p_str:
                         return 0
-                    if "qt6" in p_str:
+                    if "qt6" in p_str or "qt5" in p_str or "pyqt" in p_str:
                         return 1
                     return 2
                 

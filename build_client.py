@@ -126,7 +126,7 @@ def build_executable(has_icon):
         pyinstaller_bin,
         "--noconfirm",
         "--onefile",
-        "--console",
+        "--windowed",
         "--add-data=app_icon.png;.",
         "--add-data=version.txt;.",
         "--name=AIContourClient",
@@ -153,9 +153,9 @@ def build_executable(has_icon):
         dll_filepath = system32_path / dll
         if dll_filepath.exists():
             print(f"[INFO] Добавляем системную DLL в сборку: {dll}")
-            # Добавляем и в корень (для основного приложения), и в папку Qt (для бинарников PyQt6)
+            # Добавляем и в корень (для основного приложения), и в папку Qt (для бинарников PyQt5)
             args.append(f"--add-binary={dll_filepath};.")
-            args.append(f"--add-binary={dll_filepath};PyQt6/Qt6/bin")
+            args.append(f"--add-binary={dll_filepath};PyQt5/Qt5/bin")
         else:
             print(f"[WARNING] Системная DLL {dll} не найдена в {system32_path}!")
 
@@ -184,7 +184,8 @@ def build_executable(has_icon):
         "torch", "torchvision", "torchaudio", 
         "totalsegmentator", "SimpleITK", "nibabel", 
         "matplotlib", "pandas", "h5py", "scipy",
-        "contour_engine" # движок тоже исключаем, клиент работает только по сети через API
+        "contour_engine", # движок тоже исключаем, клиент работает только по сети через API
+        "PyQt6", "PyQt6.QtCore", "PyQt6.QtGui", "PyQt6.QtWidgets"
     ]
     for m in heavy_excludes:
         args.append(f"--exclude-module={m}")
@@ -243,7 +244,7 @@ def package_portable_zip():
             print(f"[WARNING] DLL {dll} не найдена в {system32_path}!")
             
     # Копируем opengl32sw.dll из venv прямо в портативную папку для софтверного рендеринга на серверах/RDP
-    venv_opengl = Path("venv") / "Lib" / "site-packages" / "PyQt6" / "Qt6" / "bin" / "opengl32sw.dll"
+    venv_opengl = Path("venv") / "Lib" / "site-packages" / "PyQt5" / "Qt5" / "bin" / "opengl32sw.dll"
     if venv_opengl.exists():
         print(f"[INFO] Копируем {venv_opengl.name} в портативный каталог...")
         shutil.copy2(venv_opengl, package_dir / venv_opengl.name)
@@ -357,8 +358,8 @@ def main():
         
         check_and_install_dependencies()
         
-        # Применяем патч совместимости с Windows Server 2016 / старыми Windows 10
-        patch_qt6_dll()
+        # Патч Qt6Core.dll не требуется для PyQt5
+        # patch_qt6_dll()
         
         has_icon = generate_ico_icon()
         build_executable(has_icon)
