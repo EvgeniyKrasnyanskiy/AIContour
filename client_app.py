@@ -19,6 +19,84 @@
 
 import os
 import sys
+
+# Форсируем софтверный рендеринг для стабильного запуска на RDP и виртуальных машинах
+os.environ["QT_OPENGL"] = "software"
+os.environ["QT_QUICK_BACKEND"] = "software"
+os.environ["QT_DEBUG_PLUGINS"] = "1"
+
+# --- ШИМ ДЛЯ СОВМЕСТИМОСТИ PYQT6 -> PYQT5 ---
+# Активируем шим, если принудительно задана переменная FORCE_PYQT5=1
+# или если импорт PyQt6 падает (что происходит в собранном PyQt5-клиенте или на старых ОС)
+USE_PYQT5 = os.environ.get('FORCE_PYQT5') == '1'
+if not USE_PYQT5:
+    try:
+        import PyQt6.QtCore
+    except ImportError:
+        USE_PYQT5 = True
+
+if USE_PYQT5:
+    os.environ['PYQTGRAPH_QT_LIB'] = 'PyQt5'
+    try:
+        import PyQt5.QtCore
+        import PyQt5.QtGui
+        import PyQt5.QtWidgets
+
+        # Патчим оригинальные классы PyQt5 для трансляции вложенных перечислений PyQt6
+        for name in [
+            'AlignmentFlag', 'CheckState', 'ContextMenuPolicy', 'Corner',
+            'CursorShape', 'ItemDataRole', 'ItemFlag', 'KeyboardModifier',
+            'Orientation', 'ScrollBarPolicy', 'SortOrder', 'TextInteractionFlag',
+            'WindowModality'
+        ]:
+            if not hasattr(PyQt5.QtCore.Qt, name):
+                setattr(PyQt5.QtCore.Qt, name, PyQt5.QtCore.Qt)
+
+        for name in ['EditTrigger', 'SelectionBehavior', 'SelectionMode']:
+            if not hasattr(PyQt5.QtWidgets.QAbstractItemView, name):
+                setattr(PyQt5.QtWidgets.QAbstractItemView, name, PyQt5.QtWidgets.QAbstractItemView)
+
+        if not hasattr(PyQt5.QtGui.QFont, 'Weight'):
+            setattr(PyQt5.QtGui.QFont, 'Weight', PyQt5.QtGui.QFont)
+            
+        if not hasattr(PyQt5.QtWidgets.QHeaderView, 'ResizeMode'):
+            setattr(PyQt5.QtWidgets.QHeaderView, 'ResizeMode', PyQt5.QtWidgets.QHeaderView)
+            
+        if not hasattr(PyQt5.QtWidgets.QLineEdit, 'EchoMode'):
+            setattr(PyQt5.QtWidgets.QLineEdit, 'EchoMode', PyQt5.QtWidgets.QLineEdit)
+
+        for name in ['ButtonRole', 'Icon', 'StandardButton']:
+            if not hasattr(PyQt5.QtWidgets.QMessageBox, name):
+                setattr(PyQt5.QtWidgets.QMessageBox, name, PyQt5.QtWidgets.QMessageBox)
+
+        for name in ['ColorGroup', 'ColorRole']:
+            if not hasattr(PyQt5.QtGui.QPalette, name):
+                setattr(PyQt5.QtGui.QPalette, name, PyQt5.QtGui.QPalette)
+
+        if not hasattr(PyQt5.QtCore.QSettings, 'Format'):
+            setattr(PyQt5.QtCore.QSettings, 'Format', PyQt5.QtCore.QSettings)
+            
+        if not hasattr(PyQt5.QtWidgets.QSizePolicy, 'Policy'):
+            setattr(PyQt5.QtWidgets.QSizePolicy, 'Policy', PyQt5.QtWidgets.QSizePolicy)
+            
+        if not hasattr(PyQt5.QtGui.QTextCursor, 'MoveOperation'):
+            setattr(PyQt5.QtGui.QTextCursor, 'MoveOperation', PyQt5.QtGui.QTextCursor)
+
+        if not hasattr(PyQt5.QtWidgets.QFrame, 'Shape'):
+            setattr(PyQt5.QtWidgets.QFrame, 'Shape', PyQt5.QtWidgets.QFrame)
+            
+        if not hasattr(PyQt5.QtWidgets.QFrame, 'Shadow'):
+            setattr(PyQt5.QtWidgets.QFrame, 'Shadow', PyQt5.QtWidgets.QFrame)
+
+        # Подменяем модули в sys.modules
+        sys.modules['PyQt6'] = sys.modules.get('PyQt5')
+        sys.modules['PyQt6.QtCore'] = PyQt5.QtCore
+        sys.modules['PyQt6.QtGui'] = PyQt5.QtGui
+        sys.modules['PyQt6.QtWidgets'] = PyQt5.QtWidgets
+    except ImportError:
+        pass
+# ---------------------------------------------
+
 import gc
 import shutil
 import time
@@ -28,6 +106,86 @@ import logging
 import re
 from pathlib import Path
 from typing import Dict, List, Optional
+
+# --- ДИАГНОСТИКА DLL ПРИ СТАРТЕ ---
+try:
+    import PyQt6.QtCore
+except ImportError as e:
+    import sys
+    import ctypes
+    import traceback
+    
+    diag_file = Path("auto_contour_diagnostic.txt")
+    try:
+        with open(diag_file, "w", encoding="utf-8") as f:
+            f.write("=== ДИАГНОСТИЧЕСКИЙ ОТЧЕТ AI CONTOUR ===\n")
+            f.write(f"Время запуска: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Python: {sys.version}\n")
+            f.write(f"Платформа: {sys.platform}\n")
+            f.write(f"Executable: {sys.executable}\n")
+            f.write(f"sys._MEIPASS: {getattr(sys, '_MEIPASS', 'Not Frozen')}\n\n")
+            f.write(f"Исходная ошибка импорта:\n{traceback.format_exc()}\n")
+            
+            if hasattr(sys, '_MEIPASS'):
+                mei_dir = Path(sys._MEIPASS)
+                f.write("Поиск и попытка загрузки библиотек:\n")
+                
+                # Собираем список всех DLL и PYD во временной папке
+                all_dlls = list(mei_dir.glob("**/*.dll")) + list(mei_dir.glob("**/*.pyd"))
+                
+                # Сортируем: сначала системные DLL, потом Qt, потом .pyd файлы
+                def sort_key(p: Path):
+                    p_str = str(p).lower()
+                    if "vcruntime" in p_str or "msvcp" in p_str or "concrt" in p_str or "icu" in p_str:
+                        return 0
+                    if "qt6" in p_str or "qt5" in p_str or "pyqt" in p_str:
+                        return 1
+                    return 2
+                
+                all_dlls.sort(key=sort_key)
+                
+                # Добавим пути во временной папке в DLL Directory
+                dll_dirs = set(p.parent for p in all_dlls)
+                cookie_list = []
+                for d in dll_dirs:
+                    try:
+                        cookie = ctypes.windll.kernel32.AddDllDirectory(str(d))
+                        if cookie:
+                            cookie_list.append(cookie)
+                    except Exception:
+                        pass
+                
+                for dll_path in all_dlls:
+                    try:
+                        # LOAD_WITH_ALTERED_SEARCH_PATH = 0x00000008
+                        h_lib = ctypes.windll.kernel32.LoadLibraryExW(str(dll_path), None, 8)
+                        if h_lib:
+                            f.write(f"[OK] Успешно загружена: {dll_path.relative_to(mei_dir)}\n")
+                            ctypes.windll.kernel32.FreeLibrary(h_lib)
+                        else:
+                            err_code = ctypes.windll.kernel32.GetLastError()
+                            f.write(f"[FAIL] Ошибка LoadLibraryExW (код {err_code}): {dll_path.relative_to(mei_dir)}\n")
+                    except Exception as ex:
+                        f.write(f"[EX] Ошибка при попытке загрузить {dll_path.relative_to(mei_dir)}: {ex}\n")
+                        
+                for cookie in cookie_list:
+                    try:
+                        ctypes.windll.kernel32.RemoveDllDirectory(cookie)
+                    except Exception:
+                        pass
+            else:
+                f.write("Среда не заморожена (запуск не из exe)\n")
+    except Exception as log_ex:
+        print(f"Не удалось записать диагностический файл: {log_ex}")
+        
+    try:
+        msg = f"Произошла ошибка загрузки библиотек.\nДиагностический отчет записан в файл:\n{diag_file.resolve()}\n\nПожалуйста, отправьте этот файл разработчику."
+        ctypes.windll.user32.MessageBoxW(0, msg, "AI Contour - Ошибка запуска", 0x10)
+    except Exception:
+        pass
+    raise e
+# ----------------------------------
+
 import pyqtgraph as pg
 import numpy as np
 import pydicom

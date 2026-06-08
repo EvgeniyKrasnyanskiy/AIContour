@@ -1,9 +1,9 @@
 @echo off
-title AI Contour Client - Build Portable Executable
+title AI Contour Client - Build Portable Executable (PyQt6)
 cd /d "%~dp0"
 
 echo =======================================================================
-echo Запуск автоматической сборки переносимого клиента AI Contour
+echo Запуск автоматической сборки переносимого клиента AI Contour (PyQt6)
 echo =======================================================================
 
 if not exist "venv\Scripts\activate.bat" (
@@ -16,8 +16,8 @@ if not exist "venv\Scripts\activate.bat" (
 echo [1/2] Активация виртуального окружения (venv)...
 call venv\Scripts\activate.bat
 
-echo [2/2] Запуск скрипта сборщика build_client.py...
-python build_client.py
+echo [2/2] Запуск скрипта сборщика build_clientPyQT6.py...
+python build_clientPyQT6.py
 
 if %errorlevel% neq 0 (
     echo [ERROR] Сборка завершилась с ошибкой! Код выхода: %errorlevel%

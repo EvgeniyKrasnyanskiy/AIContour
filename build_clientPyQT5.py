@@ -132,6 +132,9 @@ def build_executable(has_icon):
         "--name=AIContourClient",
     ]
     
+    # Системные библиотеки VC++ Redistributable и ICU не добавляются в PyQt5 сборку
+    pass
+
     # Добавляем иконку, если создана
     if has_icon:
         args.append("--icon=app_icon.ico")
@@ -157,7 +160,8 @@ def build_executable(has_icon):
         "torch", "torchvision", "torchaudio", 
         "totalsegmentator", "SimpleITK", "nibabel", 
         "matplotlib", "pandas", "h5py", "scipy",
-        "contour_engine" # движок тоже исключаем, клиент работает только по сети через API
+        "contour_engine", # движок тоже исключаем, клиент работает только по сети через API
+        "PyQt6", "PyQt6.QtCore", "PyQt6.QtGui", "PyQt6.QtWidgets"
     ]
     for m in heavy_excludes:
         args.append(f"--exclude-module={m}")
@@ -188,6 +192,9 @@ def package_portable_zip():
     # 1. Копируем исполняемый файл
     print(f"[INFO] Копируем {exe_file.name} в портативный каталог...")
     shutil.copy2(exe_file, package_dir / exe_file.name)
+    
+    # Копирование системных DLL и opengl32sw.dll в портативный каталог отключено для PyQt5
+    pass
     
     # 2. Исключаем копирование папки config/, так как клиент получает настройки с сервера.
     # Если на клиенте потребуется записать статистику, StatisticsManager создаст config/ автоматически.
@@ -247,6 +254,45 @@ def increment_version():
         print(f"[ERROR] Не удалось сохранить новую версию в version.txt: {e}")
         return current_version
 
+def patch_qt6_dll():
+    print_banner("2.5. Патч Qt6Core.dll для совместимости с Windows Server 2016 / старыми Windows 10")
+    
+    # Путь к Qt6Core.dll во внутреннем venv
+    dll_path = Path("venv") / "Lib" / "site-packages" / "PyQt6" / "Qt6" / "bin" / "Qt6Core.dll"
+    if not dll_path.exists():
+        print("[WARNING] Qt6Core.dll не найден по стандартному пути. Пропуск патча.")
+        return
+        
+    try:
+        # Читаем бинарные данные
+        data = dll_path.read_bytes()
+        
+        # Сигнатура вызова SetThreadDescription в kernel32.dll
+        target = b"SetThreadDescription\x00"
+        # Заменяем на SetThreadPriority (которая есть во всех версиях Windows и имеет такую же сигнатуру по регистрам)
+        # Дополняем нулями до такой же длины (21 байт), чтобы не нарушить структуру PE-файла
+        replacement = b"SetThreadPriority\x00\x00\x00\x00"
+        
+        if target in data:
+            print("[INFO] Применяем патч к Qt6Core.dll (SetThreadDescription -> SetThreadPriority)...")
+            # Создаем бэкап
+            backup_path = dll_path.with_suffix(".dll.bak")
+            if not backup_path.exists():
+                shutil.copy2(dll_path, backup_path)
+                print(f"[OK] Создан бэкап: {backup_path.name}")
+                
+            new_data = data.replace(target, replacement)
+            dll_path.write_bytes(new_data)
+            print("[OK] Qt6Core.dll успешно пропатчена для поддержки старых ОС!")
+        else:
+            # Возможно, уже пропатчена
+            if b"SetThreadPriority\x00\x00\x00\x00" in data:
+                print("[INFO] Qt6Core.dll уже содержит патч.")
+            else:
+                print("[WARNING] Не найдена сигнатура SetThreadDescription в Qt6Core.dll. Возможно, версия Qt изменена.")
+    except Exception as e:
+        print(f"[ERROR] Не удалось применить патч к Qt6Core.dll: {e}")
+
 def main():
     try:
         # Убедимся, что рабочая директория — это корень проекта
@@ -256,6 +302,10 @@ def main():
         increment_version()
         
         check_and_install_dependencies()
+        
+        # Патч Qt6Core.dll не требуется для PyQt5
+        # patch_qt6_dll()
+        
         has_icon = generate_ico_icon()
         build_executable(has_icon)
         package_portable_zip()
