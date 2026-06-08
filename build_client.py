@@ -132,6 +132,17 @@ def build_executable(has_icon):
         "--name=AIContourClient",
     ]
     
+    # Добавляем системные библиотеки VC++ Redistributable для портативности на чистых Windows системах
+    system32_path = Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32"
+    required_dlls = ["vcruntime140.dll", "msvcp140.dll", "vcruntime140_1.dll"]
+    for dll in required_dlls:
+        dll_filepath = system32_path / dll
+        if dll_filepath.exists():
+            print(f"[INFO] Добавляем системную DLL в сборку: {dll}")
+            args.append(f"--add-binary={dll_filepath};.")
+        else:
+            print(f"[WARNING] Системная DLL {dll} не найдена в {system32_path}!")
+
     # Добавляем иконку, если создана
     if has_icon:
         args.append("--icon=app_icon.ico")
