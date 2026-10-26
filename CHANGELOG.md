@@ -14,3 +14,5 @@
 
 ### Changed
 - **Ребрендинг проекта:** полный переход с AIContour на **ASS (Auto Segmentation System)** (заголовки окон, AppUserModelID, системные мьютексы, сборщики `ASS_Client.exe`, дистрибутивы `ASS_Client_Portable.zip`, DICOM AE Titles `ASS_SCP` / `ASS_SCU`).
+- **Новая иконка приложения:** обновлен логотип приложения (вид полушарий головного мозга сверху с мягким очертанием) в форматах `app_icon.png` и мультиразмерном `app_icon.ico`.
+- **Скрипты сборки клиента:** исправлен импорт PyInstaller в `build_clientPyQT5.py` и `build_clientPyQT6.py`, обновлена сборка `ASS_Client.exe` (1.0.0.12).
