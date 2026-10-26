@@ -1,9 +1,9 @@
 @echo off
-title AI Contour Client - Build Portable Executable (PyQt6)
+title ASS Client - Build Portable Executable (PyQt6)
 cd /d "%~dp0"
 
 echo =======================================================================
-echo Запуск автоматической сборки переносимого клиента AI Contour (PyQt6)
+echo Запуск автоматической сборки переносимого клиента ASS (Auto Segmentation System) (PyQt6)
 echo =======================================================================
 
 if not exist "venv\Scripts\activate.bat" (
@@ -27,6 +27,6 @@ if %errorlevel% neq 0 (
 
 echo =======================================================================
 echo Сборка успешно завершена! 
-echo Готовый дистрибутив: dist\AIContourClient_Portable.zip
+echo Готовый дистрибутив: dist\ASS_Client_Portable.zip
 echo =======================================================================
 pause

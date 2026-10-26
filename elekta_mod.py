@@ -40,7 +40,7 @@ class DicomReceiver(QObject):
     file_received = pyqtSignal(str)        # Сигнал прогресса для логов
     error_occurred = pyqtSignal(str)       # Сигнал об ошибке
 
-    def __init__(self, port: int = 10404, ae_title: str = "AIC_SCP", output_dir: str = "DICOM") -> None:
+    def __init__(self, port: int = 10404, ae_title: str = "ASS_SCP", output_dir: str = "DICOM") -> None:
         super().__init__()
         self.port = port
         self.ae_title = ae_title
@@ -146,7 +146,7 @@ class DicomSenderThread(QThread):
     finished_signal = pyqtSignal(bool, str)       # (успех, сообщение_результата)
 
     def __init__(self, ip: str, port: int = 104, ae_title: str = "MONACO", 
-                 local_ae_title: str = "AICONTOUR_SCU", files_to_send: List[str] = None) -> None:
+                 local_ae_title: str = "ASS_SCU", files_to_send: List[str] = None) -> None:
         super().__init__()
         self.ip = ip
         self.port = port
@@ -215,7 +215,7 @@ class ElektaManager:
         if self.log_callback:
             self.log_callback(text)
 
-    def start_receiver(self, port: int = 10404, ae_title: str = "AIC_SCP", 
+    def start_receiver(self, port: int = 10404, ae_title: str = "ASS_SCP", 
                        study_received_callback: Optional[Callable[[str, str], None]] = None) -> bool:
         """Запускает неблокирующий приемник DICOM на указанном порту."""
         self.stop_receiver()

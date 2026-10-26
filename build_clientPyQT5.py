@@ -129,7 +129,7 @@ def build_executable(has_icon):
         "--windowed",
         "--add-data=app_icon.png;.",
         "--add-data=version.txt;.",
-        "--name=AIContourClient",
+        "--name=ASS_Client",
     ]
     
     # Системные библиотеки VC++ Redistributable и ICU не добавляются в PyQt5 сборку
@@ -177,14 +177,14 @@ def package_portable_zip():
     print_banner("4. Подготовка переносимого (Portable) ZIP-дистрибутива")
     
     dist_dir = Path("dist")
-    exe_file = dist_dir / "AIContourClient.exe"
+    exe_file = dist_dir / "ASS_Client.exe"
     config_src = Path("config")
     
     if not exe_file.exists():
         raise RuntimeError(f"[ERROR] Собранный файл {exe_file} не найден!")
         
     # Создаем временную структуру для упаковки
-    package_dir = dist_dir / "AIContourClient_Portable"
+    package_dir = dist_dir / "ASS_Client_Portable"
     if package_dir.exists():
         shutil.rmtree(package_dir)
     package_dir.mkdir(parents=True, exist_ok=True)
@@ -196,15 +196,23 @@ def package_portable_zip():
     # Копирование системных DLL и opengl32sw.dll в портативный каталог отключено для PyQt5
     pass
     
-    # 2. Исключаем копирование папки config/, так как клиент получает настройки с сервера.
-    # Если на клиенте потребуется записать статистику, StatisticsManager создаст config/ автоматически.
-    print("[INFO] Пропуск копирования папки config/ (все настройки запрашиваются с сервера).")
+    # 2. Копируем config/client_settings.ini для удобной настройки IP пользователем
+    client_cfg = config_src / "client_settings.ini"
+    target_config_dir = package_dir / "config"
+    target_config_dir.mkdir(parents=True, exist_ok=True)
+    if client_cfg.exists():
+        print("[INFO] Копирование config/client_settings.ini в портативный дистрибутив...")
+        shutil.copy2(client_cfg, target_config_dir / "client_settings.ini")
+    else:
+        # Создаем базовый client_settings.ini
+        with open(target_config_dir / "client_settings.ini", "w", encoding="utf-8") as f:
+            f.write("[General]\nserver_url=http://127.0.0.1:8000\n")
         
     # 3. Исключено создание README_portable.txt по требованию пользователя
     pass
         
     # 4. Упаковываем все в ZIP
-    zip_filename = dist_dir / "AIContourClient_Portable.zip"
+    zip_filename = dist_dir / "ASS_Client_Portable.zip"
     if zip_filename.exists():
         zip_filename.unlink()
         

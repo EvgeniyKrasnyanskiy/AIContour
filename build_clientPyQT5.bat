@@ -1,9 +1,9 @@
 @echo off
-title AI Contour Client - Build Portable Executable
+title ASS Client - Build Portable Executable
 cd /d "%~dp0"
 
 echo =======================================================================
-echo Запуск автоматической сборки переносимого клиента AI Contour
+echo Запуск автоматической сборки переносимого клиента ASS (Auto Segmentation System)
 echo =======================================================================
 
 if not exist "venv\Scripts\activate.bat" (
@@ -27,6 +27,6 @@ if %errorlevel% neq 0 (
 
 echo =======================================================================
 echo Сборка успешно завершена! 
-echo Готовый дистрибутив: dist\AIContourClient_Portable.zip
+echo Готовый дистрибутив: dist\ASS_Client_Portable.zip
 echo =======================================================================
 pause

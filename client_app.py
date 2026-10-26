@@ -675,7 +675,8 @@ if PYQT_AVAILABLE:
             existing_rtstruct_path: Optional[str],
             use_gpu: bool,
             remove_blobs: bool,
-            smoothing_sigma: float
+            smoothing_sigma: float,
+            custom_temp_dir: Optional[str] = None
         ):
             super().__init__()
             self.server_url = server_url
@@ -683,6 +684,7 @@ if PYQT_AVAILABLE:
             self.dicom_dir = dicom_dir
             self.output_dir = output_dir
             self.preset_name = preset_name
+            self.custom_temp_dir = custom_temp_dir
             self.precision_mode = precision_mode
             self.selected_organs = selected_organs
             self.merge_mode = merge_mode
@@ -721,8 +723,11 @@ if PYQT_AVAILABLE:
                 self.step_signal.emit("Шаг 1 из 5: Архивирование КТ снимков...")
                 self.progress_signal.emit(5)
                 
-                # Создаем временный ZIP-файл
-                temp_dir = Path(tempfile.gettempdir())
+                # Создаем временный ZIP-файл (на RAM-диске или в custom_temp_dir, если настроен)
+                if self.custom_temp_dir and Path(self.custom_temp_dir).exists():
+                    temp_dir = Path(self.custom_temp_dir)
+                else:
+                    temp_dir = Path(tempfile.gettempdir())
                 temp_zip = temp_dir / f"client_upload_{int(time.time())}.zip"
                 
                 # Архивируем
@@ -1544,7 +1549,7 @@ if PYQT_AVAILABLE:
         """Главное окно графического интерфейса приложения."""
         def __init__(self):
             super().__init__()
-            self.setWindowTitle("AI Contour — Автооконтурирование органов риска (клиент)")
+            self.setWindowTitle("ASS (Auto Segmentation System) — Клиент")
             self.setMinimumSize(960, 760)
             self.showMaximized()
             self.existing_rtstruct_path = None
@@ -1638,9 +1643,12 @@ if PYQT_AVAILABLE:
             self.tab_widget = QTabWidget()
             self.tab_widget.currentChanged.connect(self.on_tab_changed)
             
-            # Индикатор состояния сервера в правом верхнем углу вкладок
+            # Индикатор состояния сервера в правом верхнем углу вкладок (кликабелен для быстрой смены IP)
             self.lbl_server_status_indicator = QLabel("Сервер: Недоступен 🔴")
-            self.lbl_server_status_indicator.setStyleSheet("font-weight: bold; color: #ff6b6b; margin-right: 10px; margin-bottom: 7px; font-size: 12px;")
+            self.lbl_server_status_indicator.setStyleSheet("font-weight: bold; color: #ff6b6b; margin-right: 10px; margin-bottom: 7px; font-size: 12px; padding: 2px 6px; border-radius: 4px;")
+            self.lbl_server_status_indicator.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.lbl_server_status_indicator.setToolTip("Кликните для быстрой настройки IP-адреса сервера ASS 🌐")
+            self.lbl_server_status_indicator.mousePressEvent = self.on_status_indicator_clicked
             self.tab_widget.setCornerWidget(self.lbl_server_status_indicator, Qt.Corner.TopRightCorner)
             
             left_layout.addWidget(self.tab_widget)
@@ -1961,14 +1969,15 @@ if PYQT_AVAILABLE:
 
 
 
-            # Группа 5: Параметры соединения с сервером AI Contour 🌐
-            conn_group = QGroupBox("Соединение с сервером AI Contour 🌐")
+            # Группа 5: Параметры соединения с сервером ASS 🌐
+            conn_group = QGroupBox("Соединение с сервером ASS 🌐")
             conn_group_layout = QVBoxLayout(conn_group)
             conn_group_layout.setSpacing(10)
             
             lbl_server_url = QLabel("Адрес сервера (IP и Порт):")
             self.server_url_edit = QLineEdit("http://127.0.0.1:8000")
             self.server_url_edit.setPlaceholderText("http://192.168.1.100:8000")
+            self.server_url_edit.textChanged.connect(self.on_server_url_changed)
             
             lbl_client_name = QLabel("Идентификатор клиента (Имя ПК):")
             import socket
@@ -1978,6 +1987,17 @@ if PYQT_AVAILABLE:
                 default_client_name = "Клиент ПК"
             self.client_name_edit = QLineEdit(default_client_name)
             self.client_name_edit.setPlaceholderText("Введите имя или кабинет...")
+            
+            lbl_temp_dir = QLabel("Папка temp для КТ (RAM-диск / отдельный диск):")
+            temp_layout = QHBoxLayout()
+            self.temp_dir_edit = QLineEdit()
+            self.temp_dir_edit.setPlaceholderText("По умолчанию (системный TEMP)")
+            self.temp_dir_edit.textChanged.connect(self.on_temp_dir_changed)
+            self.btn_browse_temp = QPushButton("📁")
+            self.btn_browse_temp.setToolTip("Выбрать рабочую временную папку (например, диск R:\\)")
+            self.btn_browse_temp.clicked.connect(self.browse_temp_dir)
+            temp_layout.addWidget(self.temp_dir_edit, 1)
+            temp_layout.addWidget(self.btn_browse_temp)
             
             self.btn_test_conn = QPushButton("⚡ Проверить подключение")
             self.btn_test_conn.setObjectName("btnAction")
@@ -1990,6 +2010,8 @@ if PYQT_AVAILABLE:
             conn_group_layout.addWidget(self.server_url_edit)
             conn_group_layout.addWidget(lbl_client_name)
             conn_group_layout.addWidget(self.client_name_edit)
+            conn_group_layout.addWidget(lbl_temp_dir)
+            conn_group_layout.addLayout(temp_layout)
             conn_group_layout.addWidget(self.btn_test_conn)
             conn_group_layout.addWidget(self.lbl_conn_status)
             conn_group.setVisible(False)
@@ -2920,6 +2942,10 @@ if PYQT_AVAILABLE:
                 if client_name:
                     self.client_name_edit.setText(client_name)
 
+                temp_dir_val = self.settings.value("temp_dir", "")
+                if hasattr(self, "temp_dir_edit") and temp_dir_val:
+                    self.temp_dir_edit.setText(temp_dir_val)
+
                 # При старте комбобокс ВСЕГДА в положении заглушки.
                 # Сохранённое имя пресета используется только для подбора текста в комбо
                 # ПОСЛЕ того как органы восстановлены из checked_organs.
@@ -3042,6 +3068,8 @@ if PYQT_AVAILABLE:
             self.settings.setValue("input_dir", self.input_edit.text().strip())
             self.settings.setValue("server_url", self.server_url_edit.text().strip())
             self.settings.setValue("client_name", self.client_name_edit.text().strip())
+            if hasattr(self, "temp_dir_edit"):
+                self.settings.setValue("temp_dir", self.temp_dir_edit.text().strip())
             if hasattr(self, "last_alternative_output_dir") and self.last_alternative_output_dir:
                 self.settings.setValue("alternative_output_dir", self.last_alternative_output_dir)
             current_preset = self.preset_combo.currentText()
@@ -3186,6 +3214,50 @@ if PYQT_AVAILABLE:
                 self.lbl_conn_status.setText("Статус: нет связи 🔴")
                 self.lbl_conn_status.setStyleSheet("color: #e74c3c; font-weight: bold;")
                 QMessageBox.critical(self, "Сбой подключения", f"Не удалось связаться с сервером:\n{e}")
+
+        def on_server_url_changed(self, text: str):
+            """Моментально сохраняет IP-адрес сервера в client_settings.ini при любом изменении пользователем."""
+            val = text.strip()
+            if val and not getattr(self, 'is_loading_settings', False):
+                self.settings.setValue("server_url", val)
+                self.settings.sync()
+
+        def on_temp_dir_changed(self, text: str):
+            """Сохраняет путь к кастомной папке temp (RAM-диск) в client_settings.ini."""
+            val = text.strip()
+            if not getattr(self, 'is_loading_settings', False):
+                self.settings.setValue("temp_dir", val)
+                self.settings.sync()
+
+        def browse_temp_dir(self):
+            """Диалог выбора папки temp (например, смонтированного RAM-диска R:\\)."""
+            import tempfile
+            current = self.temp_dir_edit.text().strip() or tempfile.gettempdir()
+            folder = QFileDialog.getExistingDirectory(self, "Выберите временную папку (RAM-диск или SSD)", current)
+            if folder:
+                self.temp_dir_edit.setText(folder)
+                self.settings.setValue("temp_dir", folder)
+                self.settings.sync()
+
+        def on_status_indicator_clicked(self, event):
+            """Быстрый диалог изменения IP сервера по клику на индикатор статуса в заголовке."""
+            current_url = self.get_server_url() or "http://127.0.0.1:8000"
+            from PyQt6.QtWidgets import QInputDialog, QLineEdit
+            new_val, ok = QInputDialog.getText(
+                self,
+                "Адрес сервера ASS 🌐",
+                "Введите сетевой адрес сервера ASS (например, http://192.168.1.100:8000):",
+                QLineEdit.EchoMode.Normal,
+                current_url
+            )
+            if ok and new_val.strip():
+                clean_val = new_val.strip().rstrip('/')
+                if not clean_val.startswith("http://") and not clean_val.startswith("https://"):
+                    clean_val = f"http://{clean_val}"
+                self.server_url_edit.setText(clean_val)
+                self.settings.setValue("server_url", clean_val)
+                self.settings.sync()
+                self.test_server_connection()
 
         def select_input_dir(self):
             dir_path = QFileDialog.getExistingDirectory(self, "Выберите папку с КТ-снимками DICOM")
@@ -5437,7 +5509,8 @@ if PYQT_AVAILABLE:
                     existing_rtstruct_path=self.existing_rtstruct_path,
                     use_gpu=self.radio_gpu.isChecked(),
                     remove_blobs=self.clean_blobs_check.isChecked(),
-                    smoothing_sigma=smoothing_sigma
+                    smoothing_sigma=smoothing_sigma,
+                    custom_temp_dir=self.temp_dir_edit.text().strip() if hasattr(self, "temp_dir_edit") else None
                 )
                 
                 # Подключаем сигналы
@@ -5594,14 +5667,18 @@ if PYQT_AVAILABLE:
                     self.lbl_server_status_indicator.setText("Сервер: ✅")
                     self.lbl_server_status_indicator.setStyleSheet("font-weight: bold; color: #2ecc71; margin-right: 10px; margin-bottom: 7px; font-size: 12px;")
                 
-                # Обновление таблицы очереди (только задачи данного клиента)
+                # Обновление таблицы очереди (все задачи очереди сервера)
                 my_client_name = self.client_name_edit.text().strip()
-                filtered_list = [item for item in info_list if item.get("client_name", "") == my_client_name]
-                self.table_queue.setRowCount(len(filtered_list))
+                self.table_queue.setRowCount(len(info_list))
                 from PyQt6.QtGui import QBrush, QColor, QFont
-                for row, item in enumerate(filtered_list):
-                    # Клиент
-                    self.table_queue.setItem(row, 0, self.create_table_item(item["client_name"]))
+                for row, item in enumerate(info_list):
+                    is_my_job = (item.get("client_name", "") == my_client_name)
+                    display_client = f"{item['client_name']} ⭐ (Этот ПК)" if is_my_job else item["client_name"]
+                    client_item = self.create_table_item(display_client)
+                    if is_my_job:
+                        client_item.setFont(QFont("Segoe UI", weight=QFont.Weight.Bold))
+                        client_item.setForeground(QBrush(QColor("#00d2d3")))
+                    self.table_queue.setItem(row, 0, client_item)
                     
                     # Пациент
                     self.table_queue.setItem(row, 1, self.create_table_item(item["patient_name"]))
@@ -5637,8 +5714,8 @@ if PYQT_AVAILABLE:
 
                 # Обновление прогресс-бара и логов для активной PROCESSING задачи ЭТОГО клиента
                 processing_job = None
-                for item in filtered_list:
-                    if item.get("status") == "PROCESSING":
+                for item in info_list:
+                    if item.get("status") == "PROCESSING" and item.get("client_name", "") == my_client_name:
                         processing_job = item
                         break
                 
@@ -5713,7 +5790,7 @@ if PYQT_AVAILABLE:
                         
                         if hasattr(self, '_current_active_job_id') and self._current_active_job_id:
                             finished_job = None
-                            for item in filtered_list:
+                            for item in info_list:
                                 if item.get("job_id") == self._current_active_job_id:
                                     finished_job = item
                                     break
@@ -5774,18 +5851,25 @@ if PYQT_AVAILABLE:
                 
             # Извлекаем job_id задачи
             job_id = self.table_queue.item(row, 0).data(Qt.ItemDataRole.UserRole)
+            client_text = self.table_queue.item(row, 0).text()
+            my_client_name = self.client_name_edit.text().strip()
             status_text = self.table_queue.item(row, 4).text()
                 
+            is_my_job = (my_client_name in client_text) or ("(Этот ПК)" in client_text)
             menu = QMenu(self)
             
-            # Клиентам доступна только отмена задачи
-            cancel_action = menu.addAction("Отменить задачу ❌")
-            cancel_action.setEnabled(status_text in ["PENDING", "PROCESSING"])
-            
-            # Действия
-            action = menu.exec(self.table_queue.mapToGlobal(pos))
-            if action == cancel_action:
-                self.cancel_job_by_id(job_id)
+            if is_my_job:
+                # Клиенту доступна отмена только собственной задачи
+                cancel_action = menu.addAction("Отменить свою задачу ❌")
+                cancel_action.setEnabled(status_text in ["PENDING", "PROCESSING"])
+                action = menu.exec(self.table_queue.mapToGlobal(pos))
+                if action == cancel_action:
+                    self.cancel_job_by_id(job_id)
+            else:
+                # Чужие задачи в очереди — строго только чтение
+                info_action = menu.addAction("🔒 Задача другого клиента (только чтение)")
+                info_action.setEnabled(False)
+                menu.exec(self.table_queue.mapToGlobal(pos))
 
         def cancel_job_by_id(self, job_id: str):
             reply = QMessageBox.question(
@@ -6508,7 +6592,7 @@ if __name__ == "__main__":
     # собственной иконки на панели задач Windows (не иконки python.exe).
     try:
         import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("AIContour.AutoContour.1.0")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ASS.AutoSegmentationSystem.1.0")
     except Exception:
         pass
 
@@ -6524,7 +6608,7 @@ if __name__ == "__main__":
     # Защита от запуска второй копии программы (используем мьютекс Windows)
     try:
         import ctypes
-        mutex_name = "AIContourClientMutex_1.0"
+        mutex_name = "ASSClientMutex_1.0"
         mutex = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
         last_error = ctypes.windll.kernel32.GetLastError()
         if last_error == 183:  # ERROR_ALREADY_EXISTS

@@ -1583,7 +1583,7 @@ if PYQT_AVAILABLE:
         """Главное окно графического интерфейса приложения."""
         def __init__(self):
             super().__init__()
-            self.setWindowTitle("AI Contour — Автооконтурирование органов риска (сервер)")
+            self.setWindowTitle("ASS (Auto Segmentation System) — Сервер")
             self.setMinimumSize(960, 760)
             self.showMaximized()
             self.existing_rtstruct_path = None
@@ -2065,8 +2065,8 @@ if PYQT_AVAILABLE:
             models_group_layout.addWidget(self.btn_manage_models)
             admin_settings_layout.addWidget(models_group)
  
-            # Группа 6: Параметры соединения с сервером AI Contour 🌐
-            conn_group = QGroupBox("Соединение с сервером AI Contour 🌐")
+            # Группа 6: Параметры соединения с сервером ASS 🌐
+            conn_group = QGroupBox("Соединение с сервером ASS 🌐")
             conn_group_layout = QVBoxLayout(conn_group)
             conn_group_layout.setSpacing(10)
             
@@ -2082,6 +2082,23 @@ if PYQT_AVAILABLE:
                 default_client_name = "Клиент ПК"
             self.client_name_edit = QLineEdit(default_client_name)
             self.client_name_edit.setPlaceholderText("Введите имя или кабинет...")
+            
+            lbl_temp_dir = QLabel("Папка temp для КТ (RAM-диск / отдельный диск):")
+            temp_layout = QHBoxLayout()
+            self.temp_dir_edit = QLineEdit()
+            self.temp_dir_edit.setPlaceholderText("По умолчанию (системный TEMP)")
+            self.btn_browse_temp = QPushButton("📁")
+            self.btn_browse_temp.setToolTip("Выбрать рабочую временную папку (например, диск R:\\)")
+            self.btn_browse_temp.clicked.connect(self.browse_temp_dir)
+            temp_layout.addWidget(self.temp_dir_edit, 1)
+            temp_layout.addWidget(self.btn_browse_temp)
+            
+            conn_group_layout.addWidget(lbl_server_url)
+            conn_group_layout.addWidget(self.server_url_edit)
+            conn_group_layout.addWidget(lbl_client_name)
+            conn_group_layout.addWidget(self.client_name_edit)
+            conn_group_layout.addWidget(lbl_temp_dir)
+            conn_group_layout.addLayout(temp_layout)
             
             self.btn_test_conn = QPushButton("⚡ Проверить подключение")
             self.btn_test_conn.setObjectName("btnAction")
@@ -2885,6 +2902,10 @@ if PYQT_AVAILABLE:
                 if client_name:
                     self.client_name_edit.setText(client_name)
 
+                temp_dir_val = self.settings.value("temp_dir", "")
+                if hasattr(self, "temp_dir_edit") and temp_dir_val:
+                    self.temp_dir_edit.setText(temp_dir_val)
+
                 # При старте комбобокс ВСЕГДА в положении заглушки.
                 # Сохранённое имя пресета используется только для подбора текста в комбо
                 # ПОСЛЕ того как органы восстановлены из checked_organs.
@@ -2961,6 +2982,9 @@ if PYQT_AVAILABLE:
             self.settings.setValue("input_dir", self.input_edit.text().strip())
             self.settings.setValue("server_url", self.server_url_edit.text().strip())
             self.settings.setValue("client_name", self.client_name_edit.text().strip())
+            if hasattr(self, "temp_dir_edit"):
+                self.settings.setValue("temp_dir", self.temp_dir_edit.text().strip())
+            self.settings.sync()
             if hasattr(self, "last_alternative_output_dir") and self.last_alternative_output_dir:
                 self.settings.setValue("alternative_output_dir", self.last_alternative_output_dir)
             current_preset = self.preset_combo.currentText()
@@ -3021,6 +3045,16 @@ if PYQT_AVAILABLE:
                 self.lbl_conn_status.setText("Статус: нет связи 🔴")
                 self.lbl_conn_status.setStyleSheet("color: #e74c3c; font-weight: bold;")
                 QMessageBox.critical(self, "Сбой подключения", f"Не удалось связаться с сервером:\n{e}")
+
+        def browse_temp_dir(self):
+            """Диалог выбора временной папки для КТ (например, RAM-диска R:\\)."""
+            import tempfile
+            current = self.temp_dir_edit.text().strip() or tempfile.gettempdir()
+            folder = QFileDialog.getExistingDirectory(self, "Выберите временную папку (RAM-диск или SSD)", current)
+            if folder:
+                self.temp_dir_edit.setText(folder)
+                self.settings.setValue("temp_dir", folder)
+                self.settings.sync()
 
         def select_input_dir(self):
             dir_path = QFileDialog.getExistingDirectory(self, "Выберите папку с КТ-снимками DICOM")
@@ -6292,7 +6326,7 @@ if __name__ == "__main__":
     # собственной иконки на панели задач Windows (не иконки python.exe).
     try:
         import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("AIContour.AutoContour.1.0")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ASS.AutoSegmentationSystem.1.0")
     except Exception:
         pass
 
@@ -6308,7 +6342,7 @@ if __name__ == "__main__":
     # Защита от запуска второй копии программы (используем мьютекс Windows)
     try:
         import ctypes
-        mutex_name = "AIContourServerMutex_1.0"
+        mutex_name = "ASSServerMutex_1.0"
         mutex = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
         last_error = ctypes.windll.kernel32.GetLastError()
         if last_error == 183:  # ERROR_ALREADY_EXISTS

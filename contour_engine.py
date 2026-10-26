@@ -1748,6 +1748,18 @@ class ContourEngine:
                             color=roi_color,
                             name=roi_name
                         )
+                        # Точная классификация типа структуры в DICOM RTSTRUCT для TPS (Monaco, Eclipse и др.)
+                        if hasattr(rtstruct.ds, "RTROIObservationsSequence") and rtstruct.ds.RTROIObservationsSequence:
+                            obs = rtstruct.ds.RTROIObservationsSequence[-1]
+                            is_body = organ_name.lower() in ["body", "external", "skin"] or roi_name.lower() in ["body", "external", "skin", "тело", "тело (body)"]
+                            if is_body:
+                                # Чтобы на станциях планирования отображалось как Body, а не как критический орган или External
+                                obs.RTROIInterpretedType = "BODY"
+                                obs.ROIObservationDescription = "Type:Body,Range:*/*,Fill:0,Opacity:0.0,Thickness:1,LineThickness:2,read-only:false"
+                            else:
+                                obs.RTROIInterpretedType = "ORGAN"
+                                obs.ROIObservationDescription = "Type:Soft,Range:*/*,Fill:0,Opacity:0.0,Thickness:1,LineThickness:2,read-only:false"
+
                         added_count += 1
                         logger.info(f"Успешно добавлен ROI '{roi_name}' (цвет: {roi_color})")
                     

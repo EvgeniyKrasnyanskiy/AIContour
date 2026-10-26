@@ -108,14 +108,39 @@ app = FastAPI(
 
 app.add_middleware(ClientTrackerMiddleware)
 
+def get_custom_temp_dir() -> Path:
+    """Возвращает настраиваемую временную папку (например, на RAM-диске или отдельном SSD)."""
+    try:
+        import configparser
+        ini_path = Path(__file__).resolve().parent.parent / "config" / "server_settings.ini"
+        if ini_path.exists():
+            cfg = configparser.ConfigParser()
+            cfg.read(ini_path, encoding="utf-8")
+            custom = cfg.get("General", "temp_dir", fallback="").strip()
+            if custom:
+                p = Path(custom)
+                p.mkdir(parents=True, exist_ok=True)
+                return p
+    except Exception as e:
+        logger.warning(f"Не удалось прочитать custom temp_dir: {e}")
+    return Path(tempfile.gettempdir())
+
+def get_jobs_root() -> str:
+    custom_temp = get_custom_temp_dir()
+    if custom_temp != Path(tempfile.gettempdir()):
+        jobs_path = custom_temp / "jobs"
+        jobs_path.mkdir(parents=True, exist_ok=True)
+        return str(jobs_path)
+    return "jobs"
+
 # Инициализируем глобальный менеджер очереди
-queue_manager = QueueManager(jobs_root="jobs")
+queue_manager = QueueManager(jobs_root=get_jobs_root())
 
 @app.get("/")
 def read_root():
     return {
         "status": "online",
-        "app": "AI Contour API Server",
+        "app": "ASS (Auto Segmentation System) API Server",
         "version": "2.0.0",
         "is_paused": queue_manager.is_paused
     }
@@ -136,9 +161,9 @@ async def upload_job(
     except Exception as je:
         raise HTTPException(status_code=400, detail=f"Невалидный JSON в параметрах options_json: {je}")
 
-    # Сохраняем загружаемый ZIP во временный файл
+    # Сохраняем загружаемый ZIP во временный файл (в настраиваемую temp директорию)
     try:
-        temp_dir = Path(tempfile.gettempdir())
+        temp_dir = get_custom_temp_dir()
         temp_zip_path = temp_dir / f"uploaded_{uuid_str()}.zip"
         
         with open(temp_zip_path, "wb") as buffer:
