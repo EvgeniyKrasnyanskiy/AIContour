@@ -71,8 +71,8 @@ def check_and_install_dependencies():
         raise RuntimeError(f"Критическая ошибка: Не удалось установить пакет {package_name} ни из одного источника.")
 
     try:
-        # Проверяем pyinstaller
-        import pyinstaller
+        # Проверяем PyInstaller
+        import PyInstaller
         print("[OK] PyInstaller уже установлен.")
     except ImportError:
         print("[INFO] PyInstaller не найден. Запуск установки...")
