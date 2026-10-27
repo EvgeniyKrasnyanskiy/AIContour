@@ -11,6 +11,7 @@ import os
 import json
 import logging
 import tempfile
+import psutil
 from pathlib import Path
 from typing import Optional, List, Dict
 from pydantic import BaseModel

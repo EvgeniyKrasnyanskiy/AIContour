@@ -2152,6 +2152,7 @@ if PYQT_AVAILABLE:
             update_admin_layout.setSpacing(8)
 
             from server.update_manager import UpdateManager
+            from version import get_version
             self.server_update_mgr = UpdateManager()
             update_meta = self.server_update_mgr.get_update_info()
 

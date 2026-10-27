@@ -110,23 +110,23 @@ class WorkerExecutionManager:
 
             # 3. Запуск TotalSegmentator через ContourEngine (на CPU воркера)
             preset_name = options.get("preset_name", "Все")
-            precision_mode = options.get("precision_mode", 0)
-            clean_blobs = options.get("clean_blobs", True)
-            smoothing_sigma = float(options.get("smoothing_sigma", 1.0))
-            device = options.get("device", "CPU")
+            precision_mode = options.get("precision_mode", "normal")
+            remove_blobs = options.get("remove_blobs", options.get("clean_blobs", False))
+            smoothing_sigma = float(options.get("smoothing_sigma", 0.0))
+            use_gpu = (options.get("device", "CPU") == "GPU")
 
             added_count, elapsed_time = self.engine.run_pipeline(
                 dicom_dir_path=str(extracted_dicom),
                 output_dir_path=str(output_workspace),
                 preset_name=preset_name,
                 precision_mode=precision_mode,
+                use_gpu=use_gpu,
+                remove_blobs=remove_blobs,
+                smoothing_sigma=smoothing_sigma,
                 step_callback=step_cb,
                 progress_callback=prog_cb,
-                clean_blobs=clean_blobs,
-                smoothing_sigma=smoothing_sigma,
-                force_device=device,
-                is_cancelled_callback=is_canc_cb,
-                register_process_callback=reg_proc_cb
+                is_cancelled_cb=is_canc_cb,
+                register_process_cb=reg_proc_cb
             )
 
             # 4. Поиск созданного RTSTRUCT и упаковка в result.zip
