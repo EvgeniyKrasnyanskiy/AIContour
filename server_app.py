@@ -1580,6 +1580,194 @@ if PYQT_AVAILABLE:
             except Exception:
                 return "процессор"
 
+    class ClientBuildThread(QThread):
+        """Фоновый поток компиляции автономного клиента PyInstaller."""
+        line_ready = pyqtSignal(str)
+        build_finished = pyqtSignal(bool, str)
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self._process = None
+
+        def run(self):
+            import subprocess, sys
+            from pathlib import Path
+
+            base_dir = Path(__file__).resolve().parent
+            venv_python = base_dir / "venv" / "Scripts" / "python.exe"
+            python_bin = str(venv_python) if venv_python.exists() else sys.executable
+            cmd = [python_bin, "build_clientPyQT6.py"]
+
+            try:
+                self._process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    cwd=str(base_dir),
+                    bufsize=1
+                )
+                for line in self._process.stdout:
+                    line_str = line.rstrip()
+                    if line_str:
+                        self.line_ready.emit(line_str)
+                self._process.wait()
+                if self._process.returncode == 0:
+                    self.build_finished.emit(True, "Компиляция клиента успешно завершена!")
+                else:
+                    self.build_finished.emit(False, f"Процесс завершился с кодом ошибки {self._process.returncode}")
+            except Exception as e:
+                self.build_finished.emit(False, str(e))
+
+        def stop(self):
+            if self._process:
+                try:
+                    self._process.terminate()
+                except Exception:
+                    pass
+
+    class ClientBuildDialog(QDialog):
+        """Интерактивное диалоговое окно компиляции клиента с живым логом и индикатором."""
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.setWindowTitle("🚀 Компиляция автономного клиента ASS_Client.exe")
+            self.resize(680, 440)
+            self.setStyleSheet("""
+                QDialog { background-color: #2f3542; color: #ffffff; }
+                QLabel { color: #ffffff; }
+                QTextEdit { background-color: #1e272e; color: #dcdde1; font-family: Consolas, monospace; font-size: 11px; border: 1px solid #57606f; border-radius: 4px; }
+                QProgressBar { border: 1px solid #57606f; border-radius: 4px; text-align: center; background-color: #1e272e; color: white; height: 18px; }
+                QProgressBar::chunk { background-color: #00d2d3; border-radius: 3px; }
+                QPushButton { background-color: #57606f; color: white; padding: 6px 16px; border-radius: 4px; font-weight: bold; }
+                QPushButton:hover { background-color: #747d8c; }
+            """)
+
+            layout = QVBoxLayout(self)
+            layout.setSpacing(10)
+
+            lbl_head = QLabel("<b>Компиляция ASS_Client.exe через PyInstaller...</b>")
+            lbl_head.setStyleSheet("font-size: 14px; color: #00d2d3;")
+            layout.addWidget(lbl_head)
+
+            lbl_sub = QLabel("Выполняется проверка сборочных зависимостей, компиляция исполняемого файла и патчинг DLL.<br>"
+                             "Обычно процесс занимает 1–2 минуты. Пожалуйста, подождите.")
+            lbl_sub.setStyleSheet("color: #a4b0be; font-size: 11px;")
+            layout.addWidget(lbl_sub)
+
+            self.progress = QProgressBar()
+            self.progress.setRange(0, 0)
+            layout.addWidget(self.progress)
+
+            self.log_text = QTextEdit()
+            self.log_text.setReadOnly(True)
+            layout.addWidget(self.log_text)
+
+            self.btn_cancel = QPushButton("Отмена")
+            self.btn_cancel.clicked.connect(self.reject)
+            layout.addWidget(self.btn_cancel, alignment=Qt.AlignmentFlag.AlignRight)
+
+            self.build_thread = ClientBuildThread(self)
+            self.build_thread.line_ready.connect(self.on_log_line)
+            self.build_thread.build_finished.connect(self.on_finished)
+            self.is_success = False
+            self.error_msg = ""
+
+        def start_build(self):
+            self.build_thread.start()
+
+        def on_log_line(self, line: str):
+            self.log_text.append(line)
+            sb = self.log_text.verticalScrollBar()
+            if sb:
+                sb.setValue(sb.maximum())
+
+        def on_finished(self, success: bool, msg: str):
+            self.is_success = success
+            self.error_msg = msg
+            self.progress.setRange(0, 100)
+            self.progress.setValue(100 if success else 0)
+            if success:
+                self.btn_cancel.setText("Готово")
+                self.btn_cancel.setStyleSheet("background-color: #2ed573; color: white;")
+                self.accept()
+            else:
+                self.btn_cancel.setText("Закрыть")
+                self.btn_cancel.setStyleSheet("background-color: #ff4757; color: white;")
+
+        def reject(self):
+            if self.build_thread.isRunning():
+                self.build_thread.stop()
+            super().reject()
+
+    class CreateWorkerDialog(QDialog):
+        """Диалоговое окно настройки и экспорта пакета вычислительного узла (Worker)."""
+        def __init__(self, default_name: str, default_id: str, default_master_url: str, parent=None):
+            super().__init__(parent)
+            self.setWindowTitle("➕ Создание пакета нового воркера (Compute Node)")
+            self.resize(540, 360)
+            self.setStyleSheet("""
+                QDialog { background-color: #2f3542; color: #ffffff; }
+                QLabel { color: #ffffff; font-size: 12px; }
+                QLineEdit { background-color: #1e272e; color: #ffffff; border: 1px solid #57606f; border-radius: 4px; padding: 6px; font-size: 12px; }
+                QPushButton#btnSave { background-color: #00d2d3; color: #1e272e; padding: 8px 18px; border-radius: 4px; font-weight: bold; font-size: 12px; }
+                QPushButton#btnSave:hover { background-color: #01a3a4; }
+                QPushButton#btnCancel { background-color: #57606f; color: white; padding: 8px 18px; border-radius: 4px; font-weight: bold; font-size: 12px; }
+                QPushButton#btnCancel:hover { background-color: #747d8c; }
+            """)
+
+            layout = QVBoxLayout(self)
+            layout.setSpacing(12)
+
+            lbl_head = QLabel("<b>⚡ Параметры нового вычислительного узла (Worker)</b>")
+            lbl_head.setStyleSheet("font-size: 14px; color: #00d2d3;")
+            layout.addWidget(lbl_head)
+
+            lbl_desc = QLabel(
+                "Будет сформирован готовый архив настроек и скриптов запуска для развертывания "
+                "на компьютере с 16 ГБ ОЗУ в сети клиники. Воркер автоматически подключится к серверу."
+            )
+            lbl_desc.setWordWrap(True)
+            lbl_desc.setStyleSheet("color: #a4b0be; font-size: 11px;")
+            layout.addWidget(lbl_desc)
+
+            layout.addWidget(QLabel("Имя воркера (отображается в кластере):"))
+            self.name_edit = QLineEdit(default_name)
+            layout.addWidget(self.name_edit)
+
+            layout.addWidget(QLabel("Уникальный идентификатор узла (Worker ID):"))
+            self.id_edit = QLineEdit(default_id)
+            layout.addWidget(self.id_edit)
+
+            layout.addWidget(QLabel("Сетевой адрес Master-сервера (URL):"))
+            self.url_edit = QLineEdit(default_master_url)
+            layout.addWidget(self.url_edit)
+
+            layout.addStretch()
+
+            btn_layout = QHBoxLayout()
+            btn_layout.addStretch()
+
+            btn_cancel = QPushButton("Отмена")
+            btn_cancel.setObjectName("btnCancel")
+            btn_cancel.clicked.connect(self.reject)
+            btn_layout.addWidget(btn_cancel)
+
+            btn_save = QPushButton("📦 Сформировать ZIP-пакет воркера...")
+            btn_save.setObjectName("btnSave")
+            btn_save.clicked.connect(self.accept)
+            btn_layout.addWidget(btn_save)
+
+            layout.addLayout(btn_layout)
+
+        def get_values(self):
+            return {
+                "name": self.name_edit.text().strip(),
+                "id": self.id_edit.text().strip(),
+                "master_url": self.url_edit.text().strip()
+            }
+
     class MainWindow(QMainWindow):
         """Главное окно графического интерфейса приложения."""
         def __init__(self, splash=None):
@@ -2175,6 +2363,12 @@ if PYQT_AVAILABLE:
             self.btn_export_configured_client.setCursor(Qt.CursorShape.PointingHandCursor)
             self.btn_export_configured_client.clicked.connect(self.export_configured_client_dialog)
             update_admin_layout.addWidget(self.btn_export_configured_client)
+
+            self.btn_create_worker = QPushButton("➕ Создать пакет нового воркера (Cluster Node)...")
+            self.btn_create_worker.setObjectName("btnAction")
+            self.btn_create_worker.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_create_worker.clicked.connect(self.create_worker_package_dialog)
+            update_admin_layout.addWidget(self.btn_create_worker)
 
             admin_settings_layout.addWidget(update_admin_group)
             
@@ -3177,12 +3371,77 @@ if PYQT_AVAILABLE:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось зарегистрировать файл обновления:\n{e}")
 
         def export_configured_client_dialog(self):
-            """Создает преднастроенный ZIP-дистрибутив клиента с прописанным IP сервера для быстрой раздачи."""
+            """Создает преднастроенный ZIP-дистрибутив клиента с возможностью компиляции на лету."""
             from pathlib import Path
             import zipfile
             from PyQt6.QtWidgets import QFileDialog, QMessageBox
             from src.network.discovery import get_local_ip
 
+            # 1. Проверяем состояние существующего файла и исходников
+            dist_binary = Path("dist/ASS_Client.exe")
+            client_app_p = Path("client_app.py")
+            is_stale = False
+            if not dist_binary.exists() or dist_binary.stat().st_size < 1024 * 1024:
+                is_stale = True
+            elif client_app_p.exists() and client_app_p.stat().st_mtime > dist_binary.stat().st_mtime:
+                is_stale = True
+
+            # Диалог выбора режима сборки / экспорта
+            choice_box = QMessageBox(self)
+            choice_box.setWindowTitle("📦 Экспорт преднастроенного клиента")
+            if is_stale:
+                choice_box.setText(
+                    "<b>Исходный код клиента (client_app.py) обновился с момента прошлой компиляции!</b><br><br>"
+                    "Рекомендуется скомпилировать свежий дистрибутив перед экспортом, чтобы все новые функции "
+                    "(UDP-автопоиск, фоновое автообновление и настройки) попали к врачам."
+                )
+            else:
+                choice_box.setText(
+                    "<b>Экспорт преднастроенного клиента для локальной сети</b><br><br>"
+                    "Вы можете быстро упаковать текущий скомпилированный файл или выполнить свежую компиляцию."
+                )
+
+            btn_compile = choice_box.addButton("🚀 Скомпилировать и упаковать", QMessageBox.ButtonRole.AcceptRole)
+            btn_compile.setStyleSheet("background-color: #00d2d3; color: #1e272e; font-weight: bold; padding: 6px 12px;")
+
+            btn_fast = choice_box.addButton("⚡ Быстрый экспорт (существующий EXE)", QMessageBox.ButtonRole.ActionRole)
+            btn_fast.setStyleSheet("background-color: #57606f; color: white; padding: 6px 12px;")
+
+            btn_cancel = choice_box.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+
+            choice_box.exec()
+            clicked_btn = choice_box.clickedButton()
+
+            if clicked_btn == btn_cancel or not clicked_btn:
+                return
+
+            if clicked_btn == btn_compile:
+                build_dlg = ClientBuildDialog(self)
+                build_dlg.start_build()
+                if build_dlg.exec() != QDialog.DialogCode.Accepted or not build_dlg.is_success:
+                    if build_dlg.error_msg and not build_dlg.is_success:
+                        QMessageBox.critical(self, "Ошибка компиляции", f"Не удалось скомпилировать клиент:\n{build_dlg.error_msg}")
+                    return
+
+                # Регистрируем свежесобранный бинарник в сервере
+                try:
+                    from version import get_version
+                    new_ver = get_version()
+                    meta = self.server_update_mgr.register_client_binary(
+                        source_path=Path("dist/ASS_Client.exe"),
+                        version_str=new_ver,
+                        is_critical=False,
+                        changelog="Автоматическая компиляция из интерфейса сервера."
+                    )
+                    self.lbl_admin_update_info.setText(
+                        f"Раздаваемая версия клиента: <b>v{meta['version']}</b><br>"
+                        f"Файл: <code>{meta['file_name']}</code> "
+                        f"({meta['file_size'] / (1024*1024):.1f} МБ)"
+                    )
+                except Exception as e:
+                    logger.warning(f"Не удалось обновить метаданные в UpdateManager: {e}")
+
+            # Теперь формируем ZIP
             local_ip = get_local_ip()
             client_binary = self.server_update_mgr.get_client_binary_path()
             if not client_binary or not client_binary.exists() or client_binary.stat().st_size < 1024 * 1024:
@@ -3192,9 +3451,9 @@ if PYQT_AVAILABLE:
                 else:
                     QMessageBox.warning(
                         self, 
-                        "Файл не найден или поврежден", 
-                        "Исполняемый файл ASS_Client.exe не найден или имеет невалидный размер (< 1 МБ).\n\n"
-                        "Сначала скомпилируйте ASS_Client.exe или загрузите его через панель обновлений."
+                        "Файл не найден", 
+                        "Исполняемый файл ASS_Client.exe не найден в dist/ или updates/client/.\n\n"
+                        "Сначала выполните компиляцию."
                     )
                     return
 
@@ -3225,7 +3484,7 @@ start "" "ASS_Client.exe"
                     zf.write(client_binary, "ASS_Client.exe")
                     zf.writestr("config/client_settings.ini", ini_content)
                     zf.writestr("run_client.bat", bat_content)
-                    
+
                     for icon in ["icon_client.ico", "icon_client.png"]:
                         p = Path(icon)
                         if p.exists():
@@ -3236,10 +3495,185 @@ start "" "ASS_Client.exe"
                     "Экспорт завершен",
                     f"Преднастроенный архив клиента успешно сформирован:\n{save_path}\n\n"
                     f"В файл config/client_settings.ini уже прописан адрес сервера: http://{local_ip}:8000.\n"
+                    f"Размер исполняемого файла: {client_binary.stat().st_size / (1024*1024):.1f} МБ.\n"
                     f"Врачам достаточно просто распаковать архив и запустить ASS_Client.exe!"
                 )
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка экспорта", f"Не удалось сформировать архив: {e}")
+
+        def create_worker_package_dialog(self):
+            """Формирует преднастроенный ZIP-пакет для подключения нового вычислительного узла (Worker)."""
+            import re, uuid, json, zipfile
+            from pathlib import Path
+            from PyQt6.QtWidgets import QFileDialog, QMessageBox
+            from src.network.discovery import get_local_ip
+
+            local_ip = get_local_ip()
+
+            # 1. Проверяем созданных и активных воркеров для автоинкремента
+            existing_numbers = []
+            workers_file = Path("config/registered_workers.json")
+            registered = []
+            if workers_file.exists():
+                try:
+                    registered = json.loads(workers_file.read_text(encoding="utf-8"))
+                    for r in registered:
+                        m = re.search(r"Worker-(\d+)", r.get("name", ""), re.IGNORECASE)
+                        if m:
+                            existing_numbers.append(int(m.group(1)))
+                except Exception:
+                    registered = []
+
+            try:
+                from server.server_api import queue_manager
+                if hasattr(queue_manager, 'cluster_mgr'):
+                    status = queue_manager.cluster_mgr.get_cluster_status()
+                    for w in status.get("workers", []):
+                        m = re.search(r"Worker-(\d+)", w.get("name", ""), re.IGNORECASE)
+                        if m:
+                            existing_numbers.append(int(m.group(1)))
+            except Exception:
+                pass
+
+            next_idx = max(existing_numbers, default=0) + 1
+            default_name = f"Worker-{next_idx:02d}"
+            default_id = f"worker_{next_idx:02d}_{uuid.uuid4().hex[:6]}"
+            default_url = f"http://{local_ip}:8000"
+
+            dlg = CreateWorkerDialog(default_name, default_id, default_url, self)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+
+            vals = dlg.get_values()
+            w_name = vals["name"] or default_name
+            w_id = vals["id"] or default_id
+            m_url = vals["master_url"] or default_url
+
+            default_zip = f"ASS_Worker_{w_name.replace(' ', '_')}.zip"
+            save_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Сохранить пакет нового воркера",
+                default_zip,
+                "Архивы ZIP (*.zip)"
+            )
+            if not save_path:
+                return
+
+            try:
+                ini_text = f"""[General]
+cluster_role=worker
+worker_id={w_id}
+worker_name={w_name}
+master_url={m_url}
+temp_dir=
+"""
+                run_bat_text = f"""@echo off
+title ASS - Compute Worker [{w_name}]
+cd /d "%~dp0"
+echo ======================================================================
+echo   ASS (Auto Segmentation System) - Compute Worker Node
+echo   Worker Name : {w_name}
+echo   Worker ID   : {w_id}
+echo   Master URL  : {m_url}
+echo ======================================================================
+echo.
+
+echo [1/2] Activating virtual environment (venv)...
+if not exist "venv\\Scripts\\activate.bat" (
+    echo [ERROR] Virtual environment 'venv' not found in %~dp0
+    echo Please make sure the venv folder with PyTorch and TotalSegmentator exists.
+    echo If this is a new PC, run setup_worker.bat first.
+    pause
+    exit /b 1
+)
+
+call venv\\Scripts\\activate.bat
+
+echo [2/2] Starting ASS Worker Service on port 8000...
+venv\\Scripts\\python.exe server\\main.py
+
+if %errorlevel% neq 0 (
+    echo [WARNING] Worker exited with code %errorlevel%
+    pause
+)
+"""
+                setup_bat_text = """@echo off
+title ASS - Worker Environment Setup
+cd /d "%~dp0"
+echo ======================================================================
+echo   ASS Worker - Initial Environment Setup (Python 3.10+)
+echo ======================================================================
+echo.
+
+echo [1/3] Creating virtual environment (Python 3.10+)...
+python -m venv venv
+if %errorlevel% neq 0 (
+    echo [ERROR] Failed to create venv. Ensure Python 3.10+ is installed and in PATH.
+    pause
+    exit /b 1
+)
+
+echo [2/3] Upgrading pip...
+call venv\\Scripts\\activate.bat
+python -m pip install --upgrade pip
+
+echo [3/3] Installing worker dependencies from requirements.txt...
+pip install -r requirements.txt
+
+echo.
+echo ======================================================================
+echo   Worker setup complete! You can now launch: run_worker.bat
+echo ======================================================================
+pause
+"""
+                readme_text = f"""================================================================================
+РУКОВОДСТВО ПО ПОДКЛЮЧЕНИЮ ВЫЧИСЛИТЕЛЬНОГО УЗЛА ASS (WORKER)
+================================================================================
+Имя узла       : {w_name}
+ID воркера     : {w_id}
+Мастер-сервер  : {m_url}
+Требования     : Компьютер в локальной сети клиники с 16 ГБ ОЗУ (CPU или GPU)
+
+ИНСТРУКЦИЯ ПО РАЗВЕРТЫВАНИЮ:
+1. Скопируйте файлы ASS (код и окружение venv) на компьютер воркера.
+2. Поместите файл server_settings.ini в папку config/ на компьютере воркера.
+3. Запустите run_worker.bat.
+4. Воркер автоматически подключится к Мастеру ({m_url}) и каждые 4 секунды
+   будет передавать heartbeat.
+5. На главном сервере во вкладке «Кластер» узел {w_name} моментально появится
+   со статусом «Свободен» (зеленый индикатор).
+================================================================================
+"""
+                with zipfile.ZipFile(save_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                    zf.writestr("config/server_settings.ini", ini_text)
+                    zf.writestr("run_worker.bat", run_bat_text)
+                    zf.writestr("setup_worker.bat", setup_bat_text)
+                    zf.writestr("README_WORKER.txt", readme_text)
+
+                registered.append({
+                    "id": w_id,
+                    "name": w_name,
+                    "master_url": m_url,
+                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
+                })
+                workers_file.parent.mkdir(parents=True, exist_ok=True)
+                workers_file.write_text(json.dumps(registered, ensure_ascii=False, indent=2), encoding="utf-8")
+
+                QMessageBox.information(
+                    self,
+                    "Воркер создан",
+                    f"Пакет для подключения воркера успешно сформирован:\n{save_path}\n\n"
+                    f"Параметры узла:\n"
+                    f"• Имя: {w_name}\n"
+                    f"• ID: {w_id}\n"
+                    f"• Сервер: {m_url}\n\n"
+                    f"Для подключения достаточно распаковать архив на целевом ПК (16 ГБ ОЗУ) "
+                    f"и запустить run_worker.bat."
+                )
+                self.update_cluster_ui()
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка создания воркера", f"Не удалось сформировать архив:\n{e}")
+
 
 
         def browse_temp_dir(self):
@@ -5831,6 +6265,12 @@ start "" "ASS_Client.exe"
             self.btn_refresh_cluster = QPushButton("🔄 Обновить узлы")
             self.btn_refresh_cluster.clicked.connect(self.update_cluster_ui)
             policy_layout.addWidget(self.btn_refresh_cluster)
+
+            self.btn_cluster_add_worker = QPushButton("➕ Создать узел воркера...")
+            self.btn_cluster_add_worker.setObjectName("btnAction")
+            self.btn_cluster_add_worker.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_cluster_add_worker.clicked.connect(self.create_worker_package_dialog)
+            policy_layout.addWidget(self.btn_cluster_add_worker)
             layout.addWidget(policy_group)
 
             # Таблица узлов кластера

@@ -53,13 +53,28 @@ from server.server_api import app
 if __name__ == "__main__":
     host = "0.0.0.0"
     port = 8000
-    from src.network.discovery import DiscoveryServer
-    discovery_srv = DiscoveryServer(http_port=port, role="master")
-    discovery_srv.start()
+    
+    import configparser
+    ini_path = Path(__file__).resolve().parent.parent / "config" / "server_settings.ini"
+    role = "master"
+    if ini_path.exists():
+        try:
+            cfg = configparser.ConfigParser()
+            cfg.read(ini_path, encoding="utf-8")
+            role = cfg.get("General", "cluster_role", fallback="master").strip().lower()
+        except Exception:
+            role = "master"
 
-    print(f"Запуск веб-сервера ASS на http://{host}:{port}...")
+    discovery_srv = None
+    if role == "master":
+        from src.network.discovery import DiscoveryServer
+        discovery_srv = DiscoveryServer(http_port=port, role="master")
+        discovery_srv.start()
+
+    print(f"Запуск веб-сервера ASS [{role.upper()}] на http://{host}:{port}...")
     try:
         uvicorn.run(app, host=host, port=port, log_level="warning")
     finally:
-        discovery_srv.stop()
+        if discovery_srv:
+            discovery_srv.stop()
 
