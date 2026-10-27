@@ -32,6 +32,13 @@ temp_autocontour_workspace/
 *.nii.gz
 rtstruct.dcm
 temp_masks/
+DICOM/
+
+# Временные файлы блокировок
+*.lock
+*.LXYJcn
+config/*.lock
+config/*.LXYJcn
 
 # Безопасность конфигураций
 config/licenses.json

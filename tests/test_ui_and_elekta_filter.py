@@ -83,6 +83,36 @@ class TestUIAndElektaFilter(unittest.TestCase):
         gpu_idx = _get_server_selected_gpu_setting()
         self.assertIsInstance(gpu_idx, int)
 
+    def test_dicom_path_with_brackets_resilience(self):
+        """Проверяет корректное обнаружение DICOM-файлов в папках с квадратными скобками [ID]."""
+        import os
+        import tempfile
+        import shutil
+        import glob
+        
+        base_temp = Path(tempfile.gettempdir())
+        test_dir = base_temp / "Patient_Test_[12345]"
+        test_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            dcm_file = test_dir / "slice_001.dcm"
+            dcm_file.write_bytes(b"mock dicom bytes")
+            
+            # glob.glob на путях с квадратными скобками возвращает 0 файлов из-за regex-паттерна
+            glob_results = glob.glob(str(test_dir / "*.dcm"))
+            self.assertEqual(len(glob_results), 0, "glob.glob must fail on paths with unescaped square brackets")
+            
+            # Наш надежный метод через os.listdir находит файл всегда
+            listdir_results = [
+                os.path.join(str(test_dir), f) for f in os.listdir(str(test_dir))
+                if os.path.isfile(os.path.join(str(test_dir), f)) and f.lower().endswith('.dcm')
+            ]
+            self.assertEqual(len(listdir_results), 1)
+            self.assertEqual(Path(listdir_results[0]).name, "slice_001.dcm")
+        finally:
+            if test_dir.exists():
+                shutil.rmtree(test_dir, ignore_errors=True)
+
 if __name__ == '__main__':
     unittest.main()
+
 

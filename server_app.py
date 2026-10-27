@@ -2371,6 +2371,7 @@ if PYQT_AVAILABLE:
                 }
             """)
             self.series_table.itemSelectionChanged.connect(self.on_series_selected)
+            self.series_table.cellClicked.connect(lambda r, c: self.on_series_selected())
             # ----------------------------------
 
             progress_header = QLabel("Индикатор прогресса:")
@@ -3216,25 +3217,36 @@ if PYQT_AVAILABLE:
                 self.series_table.setSortingEnabled(True)
                 self.series_table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
                 
-                # Восстанавливаем выделение
+                # Восстанавливаем выделение или выбираем первого пациента
+                target_row = -1
                 if selected_study_path:
-                    target_row = -1
                     for r in range(self.series_table.rowCount()):
                         item_path = self.series_table.item(r, 6)
                         if item_path and item_path.text() == selected_study_path:
                             target_row = r
                             break
-                    if target_row >= 0:
-                        self.series_table.setCurrentCell(target_row, 0)
-                        self.series_table.selectRow(target_row)
-                    else:
-                        self.series_table.clearSelection()
+                elif self.series_table.rowCount() > 0:
+                    target_row = 0
+
+                if target_row >= 0:
+                    self.series_table.setCurrentCell(target_row, 0)
+                    self.series_table.selectRow(target_row)
+                else:
+                    self.series_table.clearSelection()
             except Exception as e:
                 logger.error(f"Ошибка при обновлении таблицы исследований: {e}")
             finally:
                 self.series_table.setUpdatesEnabled(True)
                 self.on_scan_finished()
                 self._is_updating_table = False
+                # Загружаем выбранного пациента во вьюер после завершения обновления таблицы
+                if self.series_table.selectedItems():
+                    selected_row = self.series_table.selectedItems()[0].row()
+                    path_item = self.series_table.item(selected_row, 6)
+                    if path_item:
+                        cur_path = path_item.text()
+                        if getattr(self, "current_dicom_dir", None) != cur_path:
+                            self.on_series_selected()
             
         def is_worker_selected(self, worker) -> bool:
             selected = self.series_table.selectedItems()
@@ -3495,13 +3507,15 @@ if PYQT_AVAILABLE:
                     
                     rtstructs = []
                     if path and os.path.isdir(path):
-                        for f in glob.glob(os.path.join(path, "*.dcm")):
-                            try:
-                                ds = pydicom.dcmread(f, stop_before_pixels=True)
-                                if str(getattr(ds, 'Modality', '')) == 'RTSTRUCT':
-                                    rtstructs.append(f)
-                            except Exception:
-                                pass
+                        for fname in os.listdir(path):
+                            if fname.lower().endswith(".dcm"):
+                                f = os.path.join(path, fname)
+                                try:
+                                    ds = pydicom.dcmread(f, stop_before_pixels=True)
+                                    if str(getattr(ds, 'Modality', '')) == 'RTSTRUCT':
+                                        rtstructs.append(f)
+                                except Exception:
+                                    pass
                         rtstructs.sort(key=os.path.getmtime)
                     
                     if not rtstructs:
@@ -3563,37 +3577,73 @@ if PYQT_AVAILABLE:
             try:
                 import pydicom
                 import numpy as np
-                import glob
                 
-                dcm_files = glob.glob(os.path.join(folder_path, "*.dcm"))
+                dcm_files = [
+                    os.path.join(folder_path, f) for f in os.listdir(folder_path)
+                    if os.path.isfile(os.path.join(folder_path, f)) and not f.startswith('.')
+                ]
                 slices = []
                 for f in dcm_files:
                     try:
                         ds = pydicom.dcmread(f, stop_before_pixels=True)
-                        if hasattr(ds, "Modality") and ds.Modality == "CT" and hasattr(ds, "ImagePositionPatient"):
+                        mod = str(getattr(ds, "Modality", "")).strip().upper()
+                        # Исключаем неграфические объекты RT
+                        if mod in ["RTSTRUCT", "RTDOSE", "RTPLAN", "REG", "PR"]:
+                            continue
+                        # Принимаем срезы КТ, МРТ или объекты с изображениями
+                        if hasattr(ds, "PixelData") or mod in ["CT", "MR", "PT"]:
                             ds = pydicom.dcmread(f)
                             slices.append(ds)
                     except Exception:
                         pass
                 
                 if not slices:
+                    logger.warning(f"В папке '{folder_path}' не найдено срезов DICOM для отображения.")
                     return
                     
-                # Сортировка по Z
-                slices.sort(key=lambda x: float(x.ImagePositionPatient[2]))
+                # Безопасное определение Z-координаты среза
+                def get_slice_z(s):
+                    if hasattr(s, "ImagePositionPatient") and len(s.ImagePositionPatient) >= 3:
+                        try:
+                            return float(s.ImagePositionPatient[2])
+                        except Exception:
+                            pass
+                    if hasattr(s, "SliceLocation"):
+                        try:
+                            return float(s.SliceLocation)
+                        except Exception:
+                            pass
+                    if hasattr(s, "InstanceNumber"):
+                        try:
+                            return float(s.InstanceNumber)
+                        except Exception:
+                            pass
+                    return 0.0
+
+                slices.sort(key=get_slice_z)
                 
                 # Формирование 3D массива с учетом HU (RescaleSlope/Intercept)
                 volume = []
                 for s in slices:
-                    image = s.pixel_array.astype(np.float32)
-                    slope = getattr(s, 'RescaleSlope', 1)
-                    intercept = getattr(s, 'RescaleIntercept', 0)
-                    image = image * slope + intercept
-                    volume.append(image)
-                    
+                    try:
+                        image = s.pixel_array.astype(np.float32)
+                        slope = getattr(s, 'RescaleSlope', 1)
+                        intercept = getattr(s, 'RescaleIntercept', 0)
+                        image = image * slope + intercept
+                        volume.append(image)
+                    except Exception as pe:
+                        logger.warning(f"Ошибка чтения pixel_array среза: {pe}")
+                        
+                if not volume:
+                    logger.warning("Не удалось извлечь пиксельные данные из срезов.")
+                    return
+
                 volume_3d = np.stack(volume)
-                # Коррекция Window Level (Контраста)
-                volume_3d = np.clip(volume_3d, -160, 240)
+                
+                # Коррекция Window Level (Контраста) для КТ
+                mod = str(getattr(slices[0], "Modality", "CT")).strip().upper()
+                if mod == "CT":
+                    volume_3d = np.clip(volume_3d, -160, 240)
                 
                 # Транспонирование для правильной ориентации в pyqtgraph
                 volume_3d = np.transpose(volume_3d, (0, 2, 1))
@@ -3601,16 +3651,30 @@ if PYQT_AVAILABLE:
                 self.volume_3d_base = volume_3d
                 self.current_dicom_dir = folder_path
                 # Сохраняем Z-позиции срезов для корректного slice-by-slice маппинга контуров
-                self.z_positions = [float(s.ImagePositionPatient[2]) for s in slices]
+                self.z_positions = [get_slice_z(s) for s in slices]
                 self.dicom_pixel_spacing = (
                     float(getattr(slices[0], 'PixelSpacing', [1, 1])[0]),
                     float(getattr(slices[0], 'PixelSpacing', [1, 1])[1])
                 )
-                self.dicom_image_position = [
-                    float(slices[0].ImagePositionPatient[0]),
-                    float(slices[0].ImagePositionPatient[1]),
-                ]
+                if hasattr(slices[0], "ImagePositionPatient") and len(slices[0].ImagePositionPatient) >= 2:
+                    self.dicom_image_position = [
+                        float(slices[0].ImagePositionPatient[0]),
+                        float(slices[0].ImagePositionPatient[1]),
+                    ]
+                else:
+                    self.dicom_image_position = [0.0, 0.0]
+
                 self.dicom_viewer.setImage(self.volume_3d_base)
+                
+                # Устанавливаем центральный срез для наглядного отображения пациента
+                mid_idx = len(slices) // 2
+                self.dicom_viewer.setCurrentIndex(mid_idx)
+                self.dicom_viewer.autoLevels()
+                if hasattr(self.dicom_viewer, "getView"):
+                    try:
+                        self.dicom_viewer.getView().autoRange()
+                    except Exception:
+                        pass
                 
                 # Принудительно вызываем обновление оверлея если галка включена
                 if hasattr(self, 'chk_show_structures') and self.chk_show_structures.isChecked():
