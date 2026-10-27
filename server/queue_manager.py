@@ -25,6 +25,21 @@ logger = logging.getLogger("QueueManager")
 # Добавим корень проекта в пути импорта для уверенности
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 from contour_engine import ContourEngine
+from server.cluster_manager import ClusterManager, WorkerNode
+
+
+def _get_server_dispatch_policy() -> str:
+    """Безопасно считывает политику распределения задач в кластере из config/server_settings.ini."""
+    import configparser
+    try:
+        ini_path = Path(__file__).resolve().parent.parent / "config" / "server_settings.ini"
+        if not ini_path.exists():
+            return "offload_workers"
+        config = configparser.ConfigParser()
+        config.read(ini_path, encoding="utf-8")
+        return config.get("General", "dispatch_policy", fallback="offload_workers")
+    except Exception:
+        return "offload_workers"
 
 
 def _get_server_use_gpu_setting() -> bool:
@@ -117,6 +132,12 @@ class QueueManager:
         from config import StatisticsManager
         self.stats_mgr = StatisticsManager()
         
+        # Кластерный менеджер узлов вычислений (Master / Worker Pool)
+        self.cluster_mgr = ClusterManager(
+            dispatch_policy=_get_server_dispatch_policy(),
+            enable_local_compute=True
+        )
+        
         # Очищаем старые папки от предыдущих запусков при старте
         self._clear_jobs_directory_on_startup()
         
@@ -135,6 +156,8 @@ class QueueManager:
     def stop_worker(self):
         """Остановка фонового воркера."""
         self.is_running = False
+        if hasattr(self, 'cluster_mgr') and self.cluster_mgr:
+            self.cluster_mgr.stop()
         if self.worker_thread:
             self.worker_thread.join(timeout=2)
 
@@ -248,6 +271,16 @@ class QueueManager:
                         logger.warning(f"Процесс задачи {job_id} (PID: {job.active_process.pid}) уже завершен.")
                     except Exception as e:
                         logger.error(f"Не удалось остановить дерево процессов для задачи {job_id}: {e}")
+
+                # Оповещаем удаленный воркер кластера (если задача делегирована ему)
+                if hasattr(self, 'cluster_mgr'):
+                    for w in self.cluster_mgr.workers.values():
+                        if w.current_job_id == job_id and not w.is_local:
+                            try:
+                                import requests
+                                requests.post(f"{w.url}/api/worker/cancel/{job_id}", timeout=2.0)
+                            except Exception:
+                                pass
                 
                 logger.info(f"Активная задача {job_id} была принудительно отменена.")
                 # Сохраняем исходный DICOM архив для возможности последующего возобновления
@@ -385,37 +418,181 @@ class QueueManager:
                     last_cleanup_time = time.time()
 
                 # 1. Проверяем паузу сервера и наличие задач
-                next_job_id = None
-                with self.lock:
-                    if not self.is_paused and self.pending_queue:
-                        next_job_id = self.pending_queue.pop(0)
-                
-                if not next_job_id:
+                if self.is_paused or not self.pending_queue:
                     time.sleep(1)
                     continue
-                
-                # 2. Получаем объект задачи
+
+                # 2. Ищем доступный узел в кластере согласно политике распределения
+                worker_node = self.cluster_mgr.get_available_worker()
+                if not worker_node:
+                    # Все узлы (включая локальный) сейчас заняты расчетом
+                    time.sleep(1)
+                    continue
+
+                next_job_id = None
                 job = None
                 with self.lock:
+                    if not self.pending_queue:
+                        continue
+                    next_job_id = self.pending_queue.pop(0)
                     job = self.jobs.get(next_job_id)
-                    if job:
-                        if job.status == "CANCELLED":
-                            # Задача была отменена, пока стояла в очереди
-                            continue
-                        job.status = "PROCESSING"
-                        job.started_at = time.time()
-                        job.current_step = "Распаковка DICOM-файлов..."
-                        job.progress = 2
+                    if not job:
+                        continue
+                    if job.status == "CANCELLED":
+                        continue
+                    job.status = "PROCESSING"
+                    job.started_at = time.time()
+                    job.progress = 2
+                    worker_node.status = "PROCESSING"
+                    worker_node.current_job_id = job.job_id
+                    worker_node.current_patient = job.patient_name
                 
                 if not job:
                     continue
-                
-                logger.info(f"Фоновый воркер приступил к выполнению задачи {job.job_id} (Пациент: {job.patient_name})")
-                self._execute_job(job)
+
+                # 3. Маршрутизация задачи: локальный расчет vs делегирование воркеру
+                if worker_node.is_local:
+                    job.current_step = "Распаковка DICOM-файлов..."
+                    logger.info(f"Локальный узел сервера приступил к выполнению задачи {job.job_id} (Пациент: {job.patient_name})")
+                    self._execute_job(job)
+                else:
+                    job.current_step = f"Передача КТ на узел '{worker_node.name}'..."
+                    logger.info(f"Делегирование задачи {job.job_id} удаленному воркеру '{worker_node.name}' ({worker_node.url})")
+                    threading.Thread(
+                        target=self._dispatch_to_remote_worker,
+                        args=(worker_node, job),
+                        daemon=True,
+                        name=f"ASS-Dispatch-{job.job_id[:8]}"
+                    ).start()
                 
             except Exception as e:
                 logger.error(f"Критическая ошибка в цикле воркера очереди: {e}")
                 time.sleep(2)
+
+    def _dispatch_to_remote_worker(self, worker: WorkerNode, job: ServerJob):
+        """Делегирование и контроль выполнения задачи на удаленном воркере."""
+        import requests
+        job_dir = self.jobs_root / job.job_id
+        dicom_zip = job_dir / "dicom_input.zip"
+        
+        with self.lock:
+            job.current_step = f"Отправка архива КТ на узел '{worker.name}'..."
+            job.progress = 3
+            job.logs.append(f"Задача делегирована узлу '{worker.name}' ({worker.url}).")
+
+        try:
+            # 1. Загрузка DICOM архива на воркер
+            with open(dicom_zip, "rb") as f_in:
+                files = {"file": ("dicom_input.zip", f_in, "application/zip")}
+                data = {"job_id": job.job_id, "options": json.dumps(job.options)}
+                resp = requests.post(f"{worker.url}/api/worker/execute", files=files, data=data, timeout=30.0)
+
+            if resp.status_code != 200:
+                raise RuntimeError(f"Воркер '{worker.name}' отклонил задачу (код {resp.status_code}): {resp.text}")
+
+            # 2. Опрос прогресса выполнения
+            last_log_len = 0
+            while self.is_running:
+                time.sleep(1.0)
+                if job.status == "CANCELLED":
+                    try:
+                        requests.post(f"{worker.url}/api/worker/cancel/{job.job_id}", timeout=2.0)
+                    except Exception:
+                        pass
+                    break
+                    
+                try:
+                    st_res = requests.get(f"{worker.url}/api/worker/status/{job.job_id}", timeout=3.0)
+                    if st_res.status_code == 200:
+                        st_data = st_res.json()
+                        st_val = st_data.get("status", "PROCESSING")
+                        w_prog = int(st_data.get("progress", 0))
+                        w_step = st_data.get("current_step", "")
+                        w_logs = st_data.get("logs", [])
+                        
+                        with self.lock:
+                            job.progress = w_prog
+                            job.current_step = f"[{worker.name}] {w_step}"
+                            if job.started_at and w_prog > 2:
+                                elapsed = time.time() - job.started_at
+                                job.elapsed_seconds = elapsed
+                                job.eta_seconds = (elapsed / w_prog) * (100 - w_prog)
+                                
+                            if len(w_logs) > last_log_len:
+                                for nl in w_logs[last_log_len:]:
+                                    job.logs.append(f"[{worker.name}] {nl}")
+                                last_log_len = len(w_logs)
+                                
+                        if st_val == "IDLE" and w_prog >= 100:
+                            break
+                        elif st_val == "IDLE" and "ошибка" in w_step.lower():
+                            raise RuntimeError(w_step)
+                except requests.exceptions.RequestException as re:
+                    logger.warning(f"Временный сбой связи с воркером '{worker.name}': {re}")
+
+            if job.status == "CANCELLED":
+                return
+
+            # 3. Скачивание готового RTSTRUCT
+            dl_res = requests.get(f"{worker.url}/api/worker/result/{job.job_id}", timeout=60.0)
+            if dl_res.status_code != 200:
+                raise RuntimeError(f"Не удалось получить результат от воркера '{worker.name}': код {dl_res.status_code}")
+
+            result_zip_path = job_dir / "result.zip"
+            with open(result_zip_path, "wb") as f_out:
+                f_out.write(dl_res.content)
+
+            # 4. Команда воркеру на мгновенное удаление рабочих данных пациента
+            try:
+                requests.post(f"{worker.url}/api/worker/cleanup/{job.job_id}", timeout=5.0)
+            except Exception:
+                pass
+
+            # 5. Успешное завершение на Мастере
+            with self.lock:
+                job.status = "SUCCESS"
+                job.progress = 100
+                job.output_zip_path = str(result_zip_path)
+                job.completed_at = time.time()
+                if job.started_at:
+                    job.elapsed_seconds = job.completed_at - job.started_at
+                job.eta_seconds = 0.0
+                job.current_step = f"Успешно выполнено узлом '{worker.name}'!"
+                worker.jobs_completed += 1
+
+            # Очистка исходных файлов на мастере
+            self._cleanup_job_dir(job.job_id, keep_result=True, keep_input=False)
+
+            # Регистрация статистики
+            try:
+                self.stats_mgr.record_job(
+                    preset_name=job.options.get("preset_name", "Все"),
+                    organs_count=0,
+                    elapsed_time=job.elapsed_seconds,
+                    patient_name=job.patient_name,
+                    patient_id=job.patient_id,
+                    study_date=job.study_date
+                )
+            except Exception:
+                pass
+
+        except Exception as e:
+            logger.error(f"Сбой выполнения задачи {job.job_id} на воркере '{worker.name}': {e}")
+            with self.lock:
+                worker.jobs_failed += 1
+                if job.status != "CANCELLED":
+                    job.status = "FAILED"
+                    job.error_message = str(e)
+                    job.current_step = f"Сбой узла {worker.name}: {e}"
+                    job.logs.append(f"[ERROR] Сбой узла {worker.name}: {e}")
+                    job.completed_at = time.time()
+        finally:
+            with self.lock:
+                worker.status = "IDLE"
+                worker.current_job_id = None
+                worker.current_patient = ""
+                worker.progress = 0
+                worker.current_step = "Свободен"
 
     def _execute_job(self, job: ServerJob):
         """Непосредственное выполнение задачи автооконтурирования."""
@@ -428,6 +605,11 @@ class QueueManager:
         output_workspace_dir = job_dir / "output_workspace"
         output_workspace_dir.mkdir(parents=True, exist_ok=True)
         
+        if hasattr(self, 'cluster_mgr') and self.cluster_mgr.local_worker:
+            self.cluster_mgr.local_worker.status = "PROCESSING"
+            self.cluster_mgr.local_worker.current_job_id = job.job_id
+            self.cluster_mgr.local_worker.current_patient = job.patient_name
+
         try:
             # 1. Распаковываем ZIP-архив DICOM
             with zipfile.ZipFile(dicom_zip, 'r') as zip_ref:
@@ -558,6 +740,13 @@ class QueueManager:
             
             # Полная очистка при сбое (результата нет, но сохраняем входной архив для возможности возобновления)
             self._cleanup_job_dir(job.job_id, keep_result=False, keep_input=True)
+        finally:
+            if hasattr(self, 'cluster_mgr') and self.cluster_mgr.local_worker:
+                self.cluster_mgr.local_worker.status = "IDLE"
+                self.cluster_mgr.local_worker.current_job_id = None
+                self.cluster_mgr.local_worker.current_patient = ""
+                self.cluster_mgr.local_worker.progress = 0
+                self.cluster_mgr.local_worker.current_step = "Свободен"
 
     def _read_patient_metadata_from_zip(self, zip_path: Path, job: ServerJob):
         """Быстро считывает метаданные пациента напрямую из ZIP-архива в памяти."""

@@ -2221,6 +2221,12 @@ if PYQT_AVAILABLE:
             self.tab_widget.addTab(tab_stats_scroll, "📊 Статистика")
 
             # ------------------------------------------------------------------
+            # ВКЛАДКА 4: Кластер вычислений (Multi-Worker Pool)
+            # ------------------------------------------------------------------
+            self.tab_cluster_widget = self.create_cluster_tab()
+            self.tab_widget.addTab(self.tab_cluster_widget, "⚡ Кластер")
+
+            # ------------------------------------------------------------------
             # ВКЛАДКА 3: Справка и дисклеймер
             # ------------------------------------------------------------------
             tab3_widget = QWidget()
@@ -2972,6 +2978,13 @@ if PYQT_AVAILABLE:
                 # Доп параметры постобработки и точности
                 precision_idx = self.settings.value("precision_mode", 0, type=int)
                 self.precision_combo.setCurrentIndex(precision_idx)
+
+                # Политика кластера
+                if hasattr(self, "combo_cluster_policy"):
+                    pol = self.settings.value("dispatch_policy", "offload_workers")
+                    idx = self.combo_cluster_policy.findData(pol)
+                    if idx >= 0:
+                        self.combo_cluster_policy.setCurrentIndex(idx)
 
                 clean_blobs = self.settings.value("clean_blobs", True, type=bool)
                 self.clean_blobs_check.setChecked(clean_blobs)
@@ -5772,8 +5785,150 @@ start "" "ASS_Client.exe"
                 logger.error(f"Критическая ошибка в on_segmentation_finished_background: {e}")
 
         def on_tab_changed(self, index):
-            if self.tab_widget.tabText(index) == "📊 Статистика":
+            tab_name = self.tab_widget.tabText(index)
+            if tab_name == "📊 Статистика":
                 self.update_statistics_ui()
+            elif tab_name == "⚡ Кластер":
+                self.update_cluster_ui()
+
+        def create_cluster_tab(self):
+            widget = QWidget()
+            layout = QVBoxLayout(widget)
+            layout.setSpacing(12)
+            layout.setContentsMargins(15, 15, 15, 15)
+
+            # Шапка статуса
+            header_layout = QHBoxLayout()
+            lbl_title = QLabel("⚡ Кластер вычислений ASS (Multi-Worker Pool)")
+            lbl_title.setStyleSheet("font-size: 15px; font-weight: bold; color: #ffffff;")
+            header_layout.addWidget(lbl_title)
+            header_layout.addStretch()
+
+            self.lbl_cluster_summary = QLabel("Узлов: 1 | Память: 16.0 GB | В сети: 1")
+            self.lbl_cluster_summary.setStyleSheet("font-size: 12px; color: #00d2d3; font-weight: bold;")
+            header_layout.addWidget(self.lbl_cluster_summary)
+            layout.addLayout(header_layout)
+
+            # Настройки диспетчера
+            policy_group = QGroupBox("Политика распределения нагрузки (Load Balancing)")
+            policy_layout = QHBoxLayout(policy_group)
+            
+            lbl_pol = QLabel("Стратегия очереди:")
+            self.combo_cluster_policy = QComboBox()
+            self.combo_cluster_policy.addItem("Приоритет воркеров (Рекомендуется для 16 GB CPU)", "offload_workers")
+            self.combo_cluster_policy.addItem("Выделенный координатор (Мастер только диспетчер)", "dedicated_coordinator")
+            self.combo_cluster_policy.addItem("Первый свободный узел", "first_available")
+            self.combo_cluster_policy.currentIndexChanged.connect(self.on_cluster_policy_changed)
+            
+            policy_layout.addWidget(lbl_pol)
+            policy_layout.addWidget(self.combo_cluster_policy, 1)
+            
+            self.btn_refresh_cluster = QPushButton("🔄 Обновить узлы")
+            self.btn_refresh_cluster.clicked.connect(self.update_cluster_ui)
+            policy_layout.addWidget(self.btn_refresh_cluster)
+            layout.addWidget(policy_group)
+
+            # Таблица узлов кластера
+            self.table_cluster = QTableWidget()
+            self.table_cluster.setColumnCount(7)
+            self.table_cluster.setHorizontalHeaderLabels([
+                "Узел (Имя)", "Сетевой адрес", "Устройство", "Статус", "Пациент / Задача", "ОЗУ (Исп/Всего)", "Связь"
+            ])
+            self.table_cluster.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+            self.table_cluster.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+            self.table_cluster.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+            self.table_cluster.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+            self.table_cluster.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+            self.table_cluster.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+            self.table_cluster.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+            self.table_cluster.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            self.table_cluster.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            layout.addWidget(self.table_cluster, 1)
+
+            # Пояснение
+            help_banner = QLabel(
+                "💡 <i>Воркеры запускаются на компьютерах клиники (16 ГБ ОЗУ) и автоматически подключаются к серверу. "
+                "Каждый узел обрабатывает строго 1 КТ одновременно, предотвращая OOM-сбои и перегрузку памяти.</i>"
+            )
+            help_banner.setWordWrap(True)
+            help_banner.setStyleSheet("color: #a4b0be; font-size: 11px;")
+            layout.addWidget(help_banner)
+
+            return widget
+
+        def on_cluster_policy_changed(self, idx: int):
+            policy = self.combo_cluster_policy.itemData(idx)
+            if not policy:
+                return
+            try:
+                from server.server_api import queue_manager
+                if hasattr(queue_manager, 'cluster_mgr'):
+                    queue_manager.cluster_mgr.dispatch_policy = policy
+                self.settings.setValue("dispatch_policy", policy)
+                self.settings.sync()
+                logger.info(f"Политика диспетчера кластера изменена: {policy}")
+            except Exception as e:
+                logger.error(f"Не удалось изменить политику кластера: {e}")
+
+        def update_cluster_ui(self):
+            """Обновляет таблицу узлов кластера из данных cluster_mgr."""
+            try:
+                from server.server_api import queue_manager
+                if not hasattr(queue_manager, 'cluster_mgr'):
+                    return
+                status_data = queue_manager.cluster_mgr.get_cluster_status()
+                total = status_data.get("total_nodes", 0)
+                online = status_data.get("online_nodes", 0)
+                total_ram = status_data.get("total_cluster_ram_gb", 0.0)
+                self.lbl_cluster_summary.setText(f"Узлов: {total} | В сети: {online} | Память кластера: {total_ram:.1f} GB")
+
+                workers = status_data.get("workers", [])
+                self.table_cluster.setRowCount(len(workers))
+                from PyQt6.QtGui import QBrush, QColor, QFont
+                for row, w in enumerate(workers):
+                    # 0. Имя
+                    name_text = f"{w['name']} (Этот ПК)" if w.get('is_local') else w['name']
+                    item_name = self.create_table_item(name_text)
+                    if w.get('is_local'):
+                        item_name.setForeground(QBrush(QColor("#00d2d3")))
+                        item_name.setFont(QFont("Segoe UI", weight=QFont.Weight.Bold))
+                    self.table_cluster.setItem(row, 0, item_name)
+
+                    # 1. Адрес
+                    self.table_cluster.setItem(row, 1, self.create_table_item(w["url"]))
+
+                    # 2. Устройство
+                    self.table_cluster.setItem(row, 2, self.create_table_item(w.get("device", "CPU"), centered=True))
+
+                    # 3. Статус
+                    st = w.get("status", "IDLE")
+                    st_item = self.create_table_item(st, centered=True)
+                    if st == "IDLE":
+                        st_item.setText("🟢 Свободен")
+                        st_item.setForeground(QBrush(QColor("#2ecc71")))
+                    elif st == "PROCESSING":
+                        st_item.setText(f"🔵 Расчет ({w.get('progress', 0)}%)")
+                        st_item.setForeground(QBrush(QColor("#3498db")))
+                        st_item.setFont(QFont("Segoe UI", weight=QFont.Weight.Bold))
+                    else:
+                        st_item.setText("⚪ Офлайн")
+                        st_item.setForeground(QBrush(QColor("#7f8c8d")))
+                    self.table_cluster.setItem(row, 3, st_item)
+
+                    # 4. Пациент
+                    pat = w.get("current_patient") or (w.get("current_step") if st == "PROCESSING" else "-")
+                    self.table_cluster.setItem(row, 4, self.create_table_item(pat))
+
+                    # 5. Память
+                    ram_txt = f"{w.get('ram_used_mb', 0) / 1024:.1f} / {w.get('ram_total_mb', 0) / 1024:.1f} GB"
+                    self.table_cluster.setItem(row, 5, self.create_table_item(ram_txt, centered=True))
+
+                    # 6. Связь
+                    sec = w.get("seconds_since_heartbeat", 0)
+                    ping_txt = "Локально" if w.get('is_local') else (f"{int(sec)}с назад" if sec < 60 else "Таймаут")
+                    self.table_cluster.setItem(row, 6, self.create_table_item(ping_txt, centered=True))
+            except Exception as e:
+                logger.error(f"Ошибка при обновлении таблицы кластера: {e}")
 
         def create_statistics_tab(self):
             scroll = QScrollArea()
@@ -6388,6 +6543,8 @@ start "" "ASS_Client.exe"
                     """)
                     
                 self.lbl_server_address.setText(f"API запущен: http://{self.get_local_ip()}:8000")
+                if hasattr(self, 'table_cluster'):
+                    self.update_cluster_ui()
                 
                 # Обновление таблицы очереди
                 self.table_queue.setRowCount(len(info_list))

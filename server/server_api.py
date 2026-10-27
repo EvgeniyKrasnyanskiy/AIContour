@@ -21,10 +21,13 @@ from fastapi.responses import FileResponse, JSONResponse
 # Импортируем менеджер очереди и версионирование
 from server.queue_manager import QueueManager
 from server.update_manager import UpdateManager
+from server.worker_service import WorkerExecutionManager, WorkerClientThread
 from version import get_version
 
 logger = logging.getLogger("ServerAPI")
 update_manager = UpdateManager()
+worker_exec_mgr = WorkerExecutionManager()
+worker_client_thread: Optional[WorkerClientThread] = None
 
 
 import time
@@ -139,6 +142,45 @@ def get_jobs_root() -> str:
 
 # Инициализируем глобальный менеджер очереди
 queue_manager = QueueManager(jobs_root=get_jobs_root())
+
+
+@app.on_event("startup")
+def on_app_startup():
+    global worker_client_thread
+    try:
+        import configparser
+        ini_path = Path(__file__).resolve().parent.parent / "config" / "server_settings.ini"
+        if ini_path.exists():
+            cfg = configparser.ConfigParser()
+            cfg.read(ini_path, encoding="utf-8")
+            role = cfg.get("General", "cluster_role", fallback="master").strip().lower()
+            if role == "worker":
+                import socket
+                import uuid
+                worker_id = cfg.get("General", "worker_id", fallback="") or f"worker_{socket.gethostname()}_{uuid.uuid4().hex[:6]}"
+                worker_name = cfg.get("General", "worker_name", fallback="") or f"Worker-{socket.gethostname()}"
+                master_url = cfg.get("General", "master_url", fallback="")
+                worker_client_thread = WorkerClientThread(
+                    worker_id=worker_id,
+                    name=worker_name,
+                    master_url=master_url,
+                    port=8000,
+                    exec_mgr=worker_exec_mgr
+                )
+                worker_client_thread.start()
+                logger.info(f"Сервер запущен в режиме WORKER. Имя узла: '{worker_name}'.")
+    except Exception as e:
+        logger.warning(f"Не удалось инициализировать режим воркера на старте: {e}")
+
+
+@app.on_event("shutdown")
+def on_app_shutdown():
+    global worker_client_thread
+    if worker_client_thread:
+        worker_client_thread.stop()
+    if queue_manager:
+        queue_manager.stop_worker()
+
 
 @app.get("/")
 def read_root():
@@ -378,6 +420,7 @@ def get_server_status():
         "is_paused": queue_manager.is_paused,
         "pending_count": len(queue_manager.pending_queue),
         "jobs": queue_manager.get_queue_info(),
+        "cluster": queue_manager.cluster_mgr.get_cluster_status() if hasattr(queue_manager, "cluster_mgr") else {},
         "licenses": getattr(queue_manager.engine, "licenses", "")
     }
 
@@ -605,4 +648,198 @@ async def upload_client_binary(
     except Exception as e:
         logger.error(f"Ошибка сохранения обновления клиента: {e}")
         raise HTTPException(status_code=500, detail=f"Не удалось сохранить обновление: {e}")
+
+
+# ================================================================================
+# Эндпоинты Кластера (Multi-Worker Pool & Load Balancer)
+# ================================================================================
+
+class WorkerRegisterRequest(BaseModel):
+    worker_id: str
+    name: str = ""
+    host: Optional[str] = None
+    port: int = 8000
+    device: str = "CPU"
+    ram_used_mb: float = 0.0
+    ram_total_mb: float = 0.0
+    cpu_percent: float = 0.0
+    version: str = ""
+
+
+class WorkerHeartbeatRequest(BaseModel):
+    worker_id: str
+    status: Optional[str] = None
+    current_job_id: Optional[str] = None
+    current_patient: Optional[str] = None
+    progress: Optional[int] = None
+    current_step: Optional[str] = None
+    ram_used_mb: float = 0.0
+    ram_total_mb: float = 0.0
+    cpu_percent: float = 0.0
+
+
+class ClusterPolicyPayload(BaseModel):
+    policy: str
+
+
+@app.post("/api/cluster/register")
+def register_cluster_worker(payload: WorkerRegisterRequest, request: Request):
+    """
+    Регистрация вычислительного узла (Worker) в пуле кластера Master-сервера.
+    """
+    client_host = payload.host or (request.client.host if request.client else "127.0.0.1")
+    data = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+    data["host"] = client_host
+    node = queue_manager.cluster_mgr.register_worker(data)
+    return {"status": "registered", "worker": node.to_dict()}
+
+
+@app.post("/api/cluster/heartbeat")
+def worker_heartbeat(payload: WorkerHeartbeatRequest):
+    """
+    Периодический heartbeat сигнал от вычислительного узла.
+    """
+    data = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+    success = queue_manager.cluster_mgr.update_heartbeat(payload.worker_id, data)
+    if not success:
+        raise HTTPException(status_code=404, detail="Воркер не найден в пуле кластера. Требуется повторная регистрация.")
+    return {"status": "ok"}
+
+
+@app.get("/api/cluster/status")
+def get_cluster_status():
+    """
+    Возвращает список всех узлов кластера, их статус, загрузку ОЗУ/CPU и текущую задачу.
+    """
+    return queue_manager.cluster_mgr.get_cluster_status()
+
+
+@app.post("/api/cluster/policy")
+def set_cluster_policy(payload: ClusterPolicyPayload):
+    """
+    Изменение политики балансировки нагрузки в кластере.
+    """
+    valid_policies = ["offload_workers", "dedicated_coordinator", "first_available"]
+    if payload.policy not in valid_policies:
+        raise HTTPException(status_code=400, detail=f"Недопустимая политика. Доступные: {valid_policies}")
+    queue_manager.cluster_mgr.dispatch_policy = payload.policy
+    
+    # Сохраняем в config/server_settings.ini
+    try:
+        import configparser
+        ini_path = Path(__file__).resolve().parent.parent / "config" / "server_settings.ini"
+        cfg = configparser.ConfigParser()
+        if ini_path.exists():
+            cfg.read(ini_path, encoding="utf-8")
+        if not cfg.has_section("General"):
+            cfg.add_section("General")
+        cfg.set("General", "dispatch_policy", payload.policy)
+        with open(ini_path, "w", encoding="utf-8") as f:
+            cfg.write(f)
+    except Exception as e:
+        logger.warning(f"Не удалось сохранить dispatch_policy в INI: {e}")
+        
+    return {"status": "success", "policy": payload.policy}
+
+
+# ================================================================================
+# Эндпоинты выполнения задач на Воркерах (Worker Node API)
+# ================================================================================
+
+@app.post("/api/worker/execute")
+async def execute_worker_job(
+    file: UploadFile = File(...),
+    job_id: str = Form(...),
+    options: str = Form("{}")
+):
+    """
+    Прием задачи на вычислительном узле (Worker). Запускает расчет в фоновом потоке.
+    """
+    try:
+        opts_dict = json.loads(options)
+    except Exception:
+        opts_dict = {}
+        
+    job_dir = worker_exec_mgr.workspace_root / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = job_dir / "dicom_input.zip"
+    
+    content = await file.read()
+    with open(zip_path, "wb") as f_out:
+        f_out.write(content)
+        
+    import threading
+    def _run_async():
+        try:
+            worker_exec_mgr.execute_job(job_id, zip_path, opts_dict)
+        except Exception as e:
+            logger.error(f"Ошибка выполнения задачи {job_id} на воркере: {e}")
+            
+    threading.Thread(target=_run_async, daemon=True, name=f"WorkerExec-{job_id[:8]}").start()
+    return {"status": "accepted", "job_id": job_id}
+
+
+@app.get("/api/worker/status/{job_id}")
+def get_worker_job_status(job_id: str):
+    """
+    Возвращает текущий прогресс, шаг и логи выполнения задачи на воркере.
+    """
+    with worker_exec_mgr.lock:
+        return {
+            "job_id": job_id,
+            "status": worker_exec_mgr.status,
+            "progress": worker_exec_mgr.progress,
+            "current_step": worker_exec_mgr.current_step,
+            "patient": worker_exec_mgr.current_patient,
+            "logs": list(worker_exec_mgr.logs)
+        }
+
+
+@app.get("/api/worker/result/{job_id}")
+def download_worker_result(job_id: str):
+    """
+    Возвращает сформированный архив RTSTRUCT (result.zip) для отправки на Master.
+    """
+    result_zip = worker_exec_mgr.workspace_root / job_id / "result.zip"
+    if not result_zip.exists():
+        if worker_exec_mgr.last_result_zip and worker_exec_mgr.last_result_zip.exists():
+            result_zip = worker_exec_mgr.last_result_zip
+        else:
+            raise HTTPException(status_code=404, detail="Файл результатов RTSTRUCT еще не сформирован или удален.")
+            
+    return FileResponse(
+        path=str(result_zip),
+        media_type="application/zip",
+        filename=f"result_{job_id}.zip"
+    )
+
+
+@app.post("/api/worker/cleanup/{job_id}")
+def cleanup_worker_job(job_id: str):
+    """
+    Мгновенная зачистка всех DICOM и временных файлов пациента на вычислительном узле.
+    """
+    worker_exec_mgr.cleanup_job(job_id)
+    return {"status": "cleaned", "job_id": job_id}
+
+
+@app.post("/api/worker/cancel/{job_id}")
+def cancel_worker_job(job_id: str):
+    """
+    Отмена активной задачи на вычислительном узле.
+    """
+    with worker_exec_mgr.lock:
+        if worker_exec_mgr.current_job_id == job_id:
+            worker_exec_mgr.status = "IDLE"
+            worker_exec_mgr.current_step = "Отменено пользователем."
+            if worker_exec_mgr.active_process:
+                try:
+                    p = psutil.Process(worker_exec_mgr.active_process.pid)
+                    for c in p.children(recursive=True):
+                        c.kill()
+                    p.kill()
+                except Exception:
+                    pass
+    return {"status": "cancelled", "job_id": job_id}
+
 
