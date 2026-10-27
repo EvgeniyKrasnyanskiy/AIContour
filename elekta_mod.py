@@ -17,8 +17,23 @@ from PyQt6.QtCore import QObject, pyqtSignal, QThread
 from pydicom import dcmread
 from pynetdicom import AE, evt, StoragePresentationContexts
 
-# Подавление системного шума pynetdicom
+# Подавление системного шума pynetdicom и фильтрация принудительного разрыва сокетов Monaco
+class PynetdicomDulFilter(logging.Filter):
+    """
+    Подавляет пугающий спам трейсбеков WinError 10054 при разрыве TCP-сокета со стороны Monaco/PACS,
+    когда станция завершает передачу без стандартного A-RELEASE рукопожатия.
+    """
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = str(record.getMessage())
+        if "10054" in msg or "Connection closed before the entire PDU was received" in msg:
+            logging.getLogger("ElektaMod").info("Передача данных завершена (TCP-соединение закрыто удаленной станцией).")
+            return False
+        return True
+
+_dul_filter = PynetdicomDulFilter()
 logging.getLogger('pynetdicom').setLevel(logging.WARNING)
+logging.getLogger('pynetdicom.dul').addFilter(_dul_filter)
+logging.getLogger('pynetdicom.transport').addFilter(_dul_filter)
 
 # Настройка логирования
 logger = logging.getLogger("ElektaMod")
@@ -106,7 +121,7 @@ class DicomReceiver(QObject):
 
         def handle_abort(event) -> None:
             if self.current_study_dir and self.received_files:
-                logger.warning(f"Ассоциация разорвана (Abort). Передача серии {self.current_study_dir} прервана/завершена аварийно. Файлов на диске: {len(self.received_files)}.")
+                logger.info(f"Передача серии {self.current_study_dir} завершена (соединение закрыто удаленной станцией). Файлов на диске: {len(self.received_files)}.")
                 self.study_received.emit(self.current_study_dir, self.current_patient_id or "")
                 self.received_files = []
 

@@ -88,26 +88,27 @@ def check_and_install_dependencies():
 
 def generate_ico_icon():
     print_banner("2. Генерация иконки приложения")
-    png_path = Path("app_icon.png")
-    ico_path = Path("app_icon.ico")
-    
+    png_path = Path("icon_client.png")
     if not png_path.exists():
-        print(f"[WARNING] Файл {png_path} не найден! Сборка будет выполнена со стандартной иконкой.")
+        png_path = Path("app_icon.png")
+    ico_path = Path("icon_client.ico")
+    
+    if not png_path.exists() and not ico_path.exists():
+        print(f"[WARNING] Файлы иконок клиента не найдены! Сборка будет выполнена со стандартной иконкой.")
         return False
         
     try:
         from PIL import Image
-        print(f"[INFO] Конвертируем {png_path} в {ico_path}...")
-        img = Image.open(png_path)
-        
-        # Windows ico поддерживает несколько разрешений
-        sizes = [(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
-        img.save(ico_path, format="ICO", sizes=sizes)
-        print(f"[OK] Иконка {ico_path} успешно сгенерирована.")
+        if png_path.exists():
+            print(f"[INFO] Конвертируем {png_path} в {ico_path}...")
+            img = Image.open(png_path)
+            sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+            img.save(ico_path, format="ICO", sizes=sizes)
+            print(f"[OK] Иконка {ico_path} успешно сгенерирована.")
         return True
     except Exception as e:
         print(f"[WARNING] Ошибка генерации иконки: {e}. Сборка продолжится со стандартной иконкой.")
-        return False
+        return ico_path.exists()
 
 def build_executable(has_icon):
     print_banner("3. Запуск компиляции через PyInstaller")
@@ -127,6 +128,9 @@ def build_executable(has_icon):
         "--noconfirm",
         "--onefile",
         "--windowed",
+        "--add-data=icon_client.ico;.",
+        "--add-data=icon_client.png;.",
+        "--add-data=app_icon.ico;.",
         "--add-data=app_icon.png;.",
         "--add-data=version.txt;.",
         "--name=ASS_Client",
@@ -136,7 +140,9 @@ def build_executable(has_icon):
     pass
 
     # Добавляем иконку, если создана
-    if has_icon:
+    if Path("icon_client.ico").exists():
+        args.append("--icon=icon_client.ico")
+    elif has_icon:
         args.append("--icon=app_icon.ico")
         
     # ДОБАВЛЯЕМ СКРЫТЫЕ ИМПОРТЫ ДЛЯ PYDICOM, PYNETDICOM И PYQTGRAPH

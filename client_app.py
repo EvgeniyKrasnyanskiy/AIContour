@@ -1547,9 +1547,10 @@ if PYQT_AVAILABLE:
 
     class MainWindow(QMainWindow):
         """Главное окно графического интерфейса приложения."""
-        def __init__(self):
+        def __init__(self, splash=None):
             super().__init__()
-            self.setWindowTitle("ASS (Auto Segmentation System) — Клиент")
+            self.splash = splash
+            self.setWindowTitle("Auto Segmentation System [Клиент]")
             self.setMinimumSize(960, 760)
             self.showMaximized()
             self.existing_rtstruct_path = None
@@ -1558,6 +1559,9 @@ if PYQT_AVAILABLE:
             self.worker = None
             os.makedirs("config", exist_ok=True)
             self.settings = QSettings("config/client_settings.ini", QSettings.Format.IniFormat)
+
+            if self.splash:
+                self.splash.set_progress(35, "Загрузка конфигурации и анатомических пресетов...")
 
             # Инициализация вычислительного движка
             self.engine = ContourEngine()
@@ -1603,6 +1607,9 @@ if PYQT_AVAILABLE:
             self.auto_update_timer.timeout.connect(self.check_auto_update_time)
             self.auto_update_timer.start()
 
+            if self.splash:
+                self.splash.set_progress(65, "Построение интерфейса клиента...")
+
             self.init_ui()
             
             # Выведем лог стартапа, если есть буферизованные записи
@@ -1611,14 +1618,19 @@ if PYQT_AVAILABLE:
                     self.append_log(msg, col)
                 del self._startup_log_buffer
 
+            if self.splash:
+                self.splash.set_progress(85, "Загрузка настроек клиента...")
+
             self.load_settings()
             self.sync_config_from_server()
 
         def init_ui(self):
-            # Установка премиальной иконки приложения
-            icon_path = get_resource_path("app_icon.png")
-            if os.path.exists(icon_path):
-                self.setWindowIcon(QIcon(icon_path))
+            # Установка премиальной иконки клиента
+            for icon_name in ["icon_client.ico", "icon_client.png", "app_icon.ico", "app_icon.png"]:
+                icon_path = get_resource_path(icon_name)
+                if os.path.exists(icon_path):
+                    self.setWindowIcon(QIcon(icon_path))
+                    break
 
             self.setStyleSheet(DARK_QSS)
 
@@ -1855,6 +1867,7 @@ if PYQT_AVAILABLE:
             self.elekta_mode_check.stateChanged.connect(self.save_settings)
             self.elekta_local_aet_edit.textChanged.connect(self.save_settings)
             self.elekta_local_port_edit.textChanged.connect(self.save_settings)
+            self.elekta_local_port_edit.textChanged.connect(self.validate_elekta_local_port)
             self.elekta_monaco_aet_edit.textChanged.connect(self.save_settings)
             self.elekta_monaco_port_edit.textChanged.connect(self.save_settings)
             
@@ -1902,13 +1915,14 @@ if PYQT_AVAILABLE:
             self.radio_cpu = QRadioButton("CPU (Центральный процессор)")
             self.radio_gpu = QRadioButton("GPU CUDA (Рекомендуется)")
             
-            # На клиенте обе опции (GPU/CPU) всегда доступны для выбора, так как вычисления идут на сервере, но группа скрыта из интерфейса
+            # На клиенте обе опции (GPU/CPU) доступны для выбора и передаются серверу в задачу
             self.radio_gpu.setChecked(True)
             self.radio_gpu.setEnabled(True)
+            self.radio_gpu.toggled.connect(self.save_settings)
+            self.radio_cpu.toggled.connect(self.save_settings)
                 
             device_group_layout.addWidget(self.radio_gpu)
             device_group_layout.addWidget(self.radio_cpu)
-            device_group.setVisible(False)
             tab2_layout.addWidget(device_group)
 
             # Группа 2: Режимы точности TotalSegmentator
@@ -2430,6 +2444,7 @@ if PYQT_AVAILABLE:
             
             header = self.table_queue.horizontalHeader()
             header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+            self.table_queue.setColumnWidth(0, 200)
             header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
             header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
             header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
@@ -2975,9 +2990,18 @@ if PYQT_AVAILABLE:
                 self.sound_check.setChecked(play_sound)
 
                 # Загружаем выбранные ресурсы
-                use_gpu = self.settings.value("use_gpu", True, type=bool)
+                raw_gpu = self.settings.value("use_gpu", True)
+                if isinstance(raw_gpu, str):
+                    use_gpu = raw_gpu.strip().lower() in ("true", "1", "yes")
+                else:
+                    use_gpu = bool(raw_gpu)
+
+                self.radio_gpu.blockSignals(True)
+                self.radio_cpu.blockSignals(True)
                 self.radio_gpu.setChecked(use_gpu)
                 self.radio_cpu.setChecked(not use_gpu)
+                self.radio_gpu.blockSignals(False)
+                self.radio_cpu.blockSignals(False)
 
                 # Загружаем параметры Elekta mod с блокировкой сигналов, чтобы не затереть QSettings
                 self.elekta_local_aet_edit.blockSignals(True)
@@ -3000,19 +3024,13 @@ if PYQT_AVAILABLE:
                     elekta_monaco_port = str(self.settings.value("elekta_monaco_port", "104"))
                     self.elekta_monaco_port_edit.setText(elekta_monaco_port)
                     
-                    # Безопасное чтение булевого значения с подробным логированием
                     val = self.settings.value("elekta_mode_enabled", False)
-                    logger.info(f"[Elekta Debug]: Значение из реестра 'elekta_mode_enabled' = {val} (тип: {type(val)})")
-                    
                     if isinstance(val, str):
                         elekta_mode_enabled = val.lower() in ("true", "1")
                     else:
                         elekta_mode_enabled = bool(val)
-                        
-                    logger.info(f"[Elekta Debug]: Спарсенное состояние чекбокса = {elekta_mode_enabled}")
                     
                     self.elekta_mode_check.setChecked(elekta_mode_enabled)
-                    logger.info(f"[Elekta Debug]: Состояние чекбокса после setChecked = {self.elekta_mode_check.isChecked()}")
                 except Exception as elekta_err:
                     logger.error(f"Ошибка при безопасном чтении настроек Elekta mod: {elekta_err}", exc_info=True)
                 finally:
@@ -3021,6 +3039,10 @@ if PYQT_AVAILABLE:
                     self.elekta_monaco_aet_edit.blockSignals(False)
                     self.elekta_monaco_port_edit.blockSignals(False)
                     self.elekta_mode_check.blockSignals(False)
+
+                # Валидируем свободность локального порта
+                if hasattr(self, 'validate_elekta_local_port'):
+                    self.validate_elekta_local_port()
                 
                 # Вручную триггерим логику включения/выключения Elekta mod в зависимости от загруженного состояния
                 if elekta_mode_enabled:
@@ -3083,7 +3105,8 @@ if PYQT_AVAILABLE:
             self.settings.setValue("smoothing_idx", self.smoothing_combo.currentIndex())
             self.settings.setValue("color_preset", self.color_preset_combo.currentText())
             self.settings.setValue("play_sound", self.sound_check.isChecked())
-            self.settings.setValue("use_gpu", self.radio_gpu.isChecked())
+            self.settings.setValue("use_gpu", "true" if self.radio_gpu.isChecked() else "false")
+            self.settings.sync()
             
             # Сохраняем параметры Elekta mod
             if hasattr(self, 'elekta_mode_check'):
@@ -5289,6 +5312,54 @@ if PYQT_AVAILABLE:
             enabled = (state == 2)
             self.smoothing_combo.setEnabled(enabled)
 
+        def validate_elekta_local_port(self) -> bool:
+            """Проверяет доступность локального порта для приема DICOM."""
+            if not hasattr(self, 'elekta_local_port_edit'):
+                return True
+            port_text = self.elekta_local_port_edit.text().strip()
+            if not port_text:
+                self.elekta_local_port_edit.setStyleSheet("border: 2px solid #e74c3c; background-color: #2c1a1d;")
+                self.elekta_local_port_edit.setToolTip("Порт не может быть пустым!")
+                return False
+                
+            try:
+                port = int(port_text)
+                if not (1 <= port <= 65535):
+                    raise ValueError("Допустимый диапазон: 1 - 65535")
+            except ValueError as ve:
+                self.elekta_local_port_edit.setStyleSheet("border: 2px solid #e74c3c; background-color: #2c1a1d;")
+                self.elekta_local_port_edit.setToolTip(f"Некорректный порт: {ve}")
+                return False
+
+            # Если наш собственный приемник уже запущен на этом порту, то порт валиден
+            if hasattr(self, 'elekta_manager') and getattr(self.elekta_manager, 'is_running', False):
+                current_port = getattr(getattr(self.elekta_manager, 'receiver', None), 'port', None)
+                if current_port == port:
+                    self.elekta_local_port_edit.setStyleSheet("")
+                    self.elekta_local_port_edit.setToolTip(f"Порт {port} активен и слушается текущим приложением ASS.")
+                    return True
+
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(('0.0.0.0', port))
+                sock.close()
+                self.elekta_local_port_edit.setStyleSheet("")
+                self.elekta_local_port_edit.setToolTip(f"Порт {port} свободен и готов к приему данных от Monaco TPS.")
+                return True
+            except Exception:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+                self.elekta_local_port_edit.setStyleSheet("border: 2px solid #e74c3c; background-color: #2c1a1d;")
+                self.elekta_local_port_edit.setToolTip(
+                    f"Внимание: Порт {port} уже занят другим приложением или процессом!\n"
+                    f"Прием данных из Monaco будет невозможен. Укажите другой свободный порт или закройте конфликтующее ПО."
+                )
+                return False
+
         def on_elekta_mode_changed(self, state: int):
             """Слот изменения состояния чекбокса Elekta mod."""
             enabled = (state == 2)
@@ -5365,6 +5436,9 @@ if PYQT_AVAILABLE:
                 safe_message = html.escape(message)
                 self.log_edit.append(f"<span style='color: {color};'>{safe_message}</span>")
             self.log_edit.moveCursor(QTextCursor.MoveOperation.End)
+            sb = self.log_edit.verticalScrollBar()
+            if sb:
+                sb.setValue(sb.maximum())
 
         def start_segmentation(self):
             """Запускает неблокирующий процесс сегментации в фоновом режиме."""
@@ -6045,6 +6119,8 @@ if PYQT_AVAILABLE:
                 if worker in self.active_workers:
                     self.active_workers.remove(worker)
                 self.update_run_button(bool(self.series_table.selectedItems()))
+                if hasattr(self, 'log_edit'):
+                    QTimer.singleShot(50, lambda: self.log_edit.verticalScrollBar().setValue(self.log_edit.verticalScrollBar().maximum()))
 
         def on_segmentation_finished(self, success: bool, message: str):
             try:
@@ -6592,7 +6668,7 @@ if __name__ == "__main__":
     # собственной иконки на панели задач Windows (не иконки python.exe).
     try:
         import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ASS.AutoSegmentationSystem.1.0")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ASS.Client.1.0")
     except Exception:
         pass
 
@@ -6619,10 +6695,18 @@ if __name__ == "__main__":
         pass
 
     # Иконка на QApplication охватывает все окна приложения
-    icon_path = get_resource_path("app_icon.png")
-    if os.path.exists(icon_path):
-        app.setWindowIcon(QIcon(icon_path))
+    for icon_name in ["icon_client.ico", "icon_client.png", "app_icon.ico", "app_icon.png"]:
+        icon_path = get_resource_path(icon_name)
+        if os.path.exists(icon_path):
+            app.setWindowIcon(QIcon(icon_path))
+            break
 
-    window = MainWindow()
-    window.show()
+    # Сплэш-скрин загрузки клиента
+    from src.ui.splash import create_splash_screen
+    splash = create_splash_screen(app, is_server=False)
+    splash.set_progress(15, "Загрузка конфигурации интерфейса...")
+
+    window = MainWindow(splash=splash)
+    splash.set_progress(100, "Клиент готов к работе!")
+    splash.finish(window)
     sys.exit(app.exec())

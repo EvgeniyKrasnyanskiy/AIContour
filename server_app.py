@@ -1581,9 +1581,10 @@ if PYQT_AVAILABLE:
 
     class MainWindow(QMainWindow):
         """Главное окно графического интерфейса приложения."""
-        def __init__(self):
+        def __init__(self, splash=None):
             super().__init__()
-            self.setWindowTitle("ASS (Auto Segmentation System) — Сервер")
+            self.splash = splash
+            self.setWindowTitle("Auto Segmentation System [Сервер]")
             self.setMinimumSize(960, 760)
             self.showMaximized()
             self.existing_rtstruct_path = None
@@ -1593,6 +1594,9 @@ if PYQT_AVAILABLE:
             self.active_workers = []
             os.makedirs("config", exist_ok=True)
             self.settings = QSettings("config/server_settings.ini", QSettings.Format.IniFormat)
+
+            if self.splash:
+                self.splash.set_progress(35, "Инициализация вычислительного движка...")
 
             # Инициализация вычислительного движка
             self.engine = ContourEngine()
@@ -1630,7 +1634,14 @@ if PYQT_AVAILABLE:
             self.is_toggling_pause = False
             self.failed_server_status_checks = 0
             self.server_process = None
+            
+            if self.splash:
+                self.splash.set_progress(55, "Запуск фонового процесса сервера FastAPI...")
+                
             self.start_server_process()
+
+            if self.splash:
+                self.splash.set_progress(75, "Построение пользовательского интерфейса...")
 
             self.init_ui()
             
@@ -1711,10 +1722,12 @@ if PYQT_AVAILABLE:
                 QMessageBox.critical(self, "Ошибка сервера", f"Не удалось запустить серверный процесс: {e}")
 
         def init_ui(self):
-            # Установка премиальной иконки приложения
-            icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_icon.png")
-            if os.path.exists(icon_path):
-                self.setWindowIcon(QIcon(icon_path))
+            # Установка премиальной иконки сервера
+            for icon_name in ["icon_server.ico", "icon_server.png", "app_icon.ico", "app_icon.png"]:
+                icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), icon_name)
+                if os.path.exists(icon_path):
+                    self.setWindowIcon(QIcon(icon_path))
+                    break
 
             self.setStyleSheet(DARK_QSS)
 
@@ -2531,6 +2544,7 @@ if PYQT_AVAILABLE:
             
             header = self.table_queue.horizontalHeader()
             header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+            self.table_queue.setColumnWidth(0, 200)
             header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
             header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
             header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
@@ -2935,13 +2949,27 @@ if PYQT_AVAILABLE:
                 self.sound_check.setChecked(play_sound)
 
                 # Загружаем выбранные ресурсы
-                use_gpu = self.settings.value("use_gpu", True, type=bool)
+                raw_gpu = self.settings.value("use_gpu", True)
+                if isinstance(raw_gpu, str):
+                    use_gpu = raw_gpu.strip().lower() in ("true", "1", "yes")
+                else:
+                    use_gpu = bool(raw_gpu)
+
+                if hasattr(self, "radio_gpu") and not self.radio_gpu.isEnabled():
+                    use_gpu = False
+
+                self.radio_gpu.blockSignals(True)
+                self.radio_cpu.blockSignals(True)
                 self.radio_gpu.setChecked(use_gpu)
                 self.radio_cpu.setChecked(not use_gpu)
+                self.radio_gpu.blockSignals(False)
+                self.radio_cpu.blockSignals(False)
                 
                 selected_gpu = self.settings.value("selected_gpu", 0, type=int)
                 if hasattr(self, "gpu_combo") and self.gpu_combo.count() > selected_gpu:
+                    self.gpu_combo.blockSignals(True)
                     self.gpu_combo.setCurrentIndex(selected_gpu)
+                    self.gpu_combo.blockSignals(False)
 
                 # Восстанавливаем галочки органов (без сигналов)
                 checked_organs = self.settings.value("checked_organs", None)
@@ -2998,7 +3026,7 @@ if PYQT_AVAILABLE:
             self.settings.setValue("smoothing_idx", self.smoothing_combo.currentIndex())
             self.settings.setValue("color_preset", self.color_preset_combo.currentText())
             self.settings.setValue("play_sound", self.sound_check.isChecked())
-            self.settings.setValue("use_gpu", self.radio_gpu.isChecked())
+            self.settings.setValue("use_gpu", "true" if self.radio_gpu.isChecked() else "false")
             if hasattr(self, "gpu_combo"):
                 self.settings.setValue("selected_gpu", self.gpu_combo.currentIndex())
             
@@ -5072,6 +5100,9 @@ if PYQT_AVAILABLE:
                 safe_message = html.escape(message)
                 self.log_edit.append(f"<span style='color: {color};'>{safe_message}</span>")
             self.log_edit.moveCursor(QTextCursor.MoveOperation.End)
+            sb = self.log_edit.verticalScrollBar()
+            if sb:
+                sb.setValue(sb.maximum())
 
         def start_segmentation(self):
             """Запускает процесс автооконтурирования для выбранного пациента."""
@@ -5454,6 +5485,9 @@ if PYQT_AVAILABLE:
                 
                 # Обновляем кнопку запуска
                 self.update_run_button(bool(self.series_table.selectedItems()))
+
+                if hasattr(self, 'log_edit'):
+                    QTimer.singleShot(50, lambda: self.log_edit.verticalScrollBar().setValue(self.log_edit.verticalScrollBar().maximum()))
                 
             except Exception as e:
                 import traceback
@@ -6326,7 +6360,7 @@ if __name__ == "__main__":
     # собственной иконки на панели задач Windows (не иконки python.exe).
     try:
         import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ASS.AutoSegmentationSystem.1.0")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ASS.Server.1.0")
     except Exception:
         pass
 
@@ -6353,10 +6387,18 @@ if __name__ == "__main__":
         pass
 
     # Иконка на QApplication охватывает все окна приложения
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_icon.png")
-    if os.path.exists(icon_path):
-        app.setWindowIcon(QIcon(icon_path))
+    for icon_name in ["icon_server.ico", "icon_server.png", "app_icon.ico", "app_icon.png"]:
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), icon_name)
+        if os.path.exists(icon_path):
+            app.setWindowIcon(QIcon(icon_path))
+            break
 
-    window = MainWindow()
-    window.show()
+    # Сплэш-скрин загрузки сервера
+    from src.ui.splash import create_splash_screen
+    splash = create_splash_screen(app, is_server=True)
+    splash.set_progress(15, "Загрузка конфигурации и стилей оформления...")
+
+    window = MainWindow(splash=splash)
+    splash.set_progress(100, "Сервер готов к работе!")
+    splash.finish(window)
     sys.exit(app.exec())

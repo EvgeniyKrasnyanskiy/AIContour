@@ -25,6 +25,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+icon_choose
 
 # Исключения для медицинских данных и временных файлов
 temp_autocontour_workspace/

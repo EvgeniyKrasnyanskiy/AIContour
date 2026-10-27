@@ -469,10 +469,14 @@ class QueueManager:
                     job.active_process = p
 
             # 3. Запускаем вычислительный пайплайн
-            final_use_gpu = _get_server_use_gpu_setting()
+            client_use_gpu = job.options.get("use_gpu")
+            if client_use_gpu is not None:
+                final_use_gpu = bool(client_use_gpu)
+            else:
+                final_use_gpu = _get_server_use_gpu_setting()
             selected_gpu_idx = _get_server_selected_gpu_setting()
             job.device = "GPU" if final_use_gpu else "CPU"
-            logger.info(f"[{job.job_id}] Режим расчета на сервере: {job.device} (Индекс GPU: {selected_gpu_idx})")
+            logger.info(f"[{job.job_id}] Режим расчета: {job.device} (Индекс GPU: {selected_gpu_idx}, от клиента: {client_use_gpu})")
 
             added_count, elapsed_time = self.engine.run_pipeline(
                 dicom_dir_path=str(extracted_dicom_dir),
