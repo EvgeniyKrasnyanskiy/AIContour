@@ -4175,10 +4175,16 @@ ID воркера     : {w_id}
 1. Распакуйте содержимое данного архива в чистую папку на компьютере воркера
    (например, C:\\ASS_Worker).
    ВАЖНО: Если воркер уже запускался, перед распаковкой закройте предыдущее окно воркера.
-2. Запустите файл run_worker.bat от имени обычного пользователя.
-3. Воркер запустит вычислительный процесс и автоматически подключится к серверу:
+2. Варианты запуска:
+   - С консольным окном (для отладки) : запустите run_worker.bat
+   - Без консоли (в тихом режиме)     : запустите run_worker_no_console.bat
+   - Добавить в автозагрузку Windows : запустите add_to_startup.bat
+   - Удалить из автозагрузки          : запустите remove_from_startup.bat
+3. Управление и диагностика:
+   - Проверить статус работы воркера  : запустите status_worker.bat
+   - Остановить фоновый процесс воркера: запустите stop_worker.bat
+4. Воркер запустит вычислительный процесс и автоматически подключится к серверу:
    {m_url}
-4. Каждые 4 секунды воркер отправляет heartbeat и сообщает о готовности к расчету.
 5. На главном сервере во вкладке «Кластер» узел {w_name} моментально появится
    со статусом «Свободен» (зеленый индикатор) и начнет параллельно обрабатывать КТ.
 ================================================================================
@@ -4205,42 +4211,105 @@ if exist "%~dp0venv\\Scripts\\pythonw.exe" (
 start "" pythonw server\\main.py
 exit /b 0
 """
-                add_startup_text = f"""@echo off
+                status_worker_text = f"""@echo off
 set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
 chcp 65001 > nul
 cd /d "%~dp0"
+
 echo ======================================================================
-echo   Добавление ASS Worker [{w_name}] в автозагрузку Windows
+echo   ASS Worker [{w_name}] - Status Checker
 echo ======================================================================
 echo.
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -like 'python*' -and ($_.CommandLine -like '*server\\main.py*' -or $_.CommandLine -like '*server/main.py*') }}); if ($procs.Count -gt 0) {{ Write-Host '[STATUS] ASS Worker is RUNNING in background!' -ForegroundColor Green; foreach ($p in $procs) {{ Write-Host ('  -> Process: ' + $p.Name + ' (PID: ' + $p.ProcessId + ')') }} }} else {{ Write-Host '[STATUS] ASS Worker is STOPPED.' -ForegroundColor Yellow; Write-Host '  -> Launch run_worker.bat or run_worker_no_console.bat to start.' }}"
+
+echo.
+if exist "%~dp0logs\\server_backend.log" (
+    echo ======================================================================
+    echo   Last 10 lines of logs\\server_backend.log:
+    echo ======================================================================
+    powershell -NoProfile -Command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Content -Path '%~dp0logs\\server_backend.log' -Tail 10 -Encoding UTF8" 2>nul
+    echo ======================================================================
+) else (
+    echo [INFO] Log file logs\\server_backend.log does not exist yet.
+)
+
+echo.
+pause
+"""
+                stop_worker_text = f"""@echo off
+set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
+cd /d "%~dp0"
+
+echo ======================================================================
+echo   Stopping ASS Worker [{w_name}] background process...
+echo ======================================================================
+echo.
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$stopped = 0; Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -like 'python*' -and ($_.CommandLine -like '*server\\main.py*' -or $_.CommandLine -like '*server/main.py*') }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force; Write-Host ('[STOPPED] Terminated worker process PID ' + $_.ProcessId); $stopped = 1 }}; if ($stopped -eq 0) {{ Write-Host '[INFO] No running ASS Worker process was found.' }}"
+
+echo.
+echo Operation finished.
+echo.
+pause
+"""
+                add_startup_text = f"""@echo off
+set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
+cd /d "%~dp0"
+
+echo ======================================================================
+echo   Adding ASS Worker [{w_name}] to Windows Startup
+echo ======================================================================
+echo.
+
+set "TARGET_BAT=%~dp0run_worker_no_console.bat"
+set "WORKING_DIR=%~dp0"
+set "SHORTCUT_PATH=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\ASS_Compute_Worker_{w_name.replace(' ', '_')}.lnk"
+
 set "VBS_SCRIPT=%TEMP%\\create_worker_lnk_%RANDOM%.vbs"
-set "STARTUP_DIR=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
 echo Set oWS = WScript.CreateObject("WScript.Shell") > "%VBS_SCRIPT%"
-echo sLinkFile = "%STARTUP_DIR%\\ASS_Compute_Worker_{w_name.replace(' ', '_')}.lnk" >> "%VBS_SCRIPT%"
+echo sLinkFile = "%SHORTCUT_PATH%" >> "%VBS_SCRIPT%"
 echo Set oLink = oWS.CreateShortcut(sLinkFile) >> "%VBS_SCRIPT%"
-echo oLink.TargetPath = "%~dp0run_worker_no_console.bat" >> "%VBS_SCRIPT%"
-echo oLink.WorkingDirectory = "%~dp0" >> "%VBS_SCRIPT%"
+echo oLink.TargetPath = "%TARGET_BAT%" >> "%VBS_SCRIPT%"
+echo oLink.WorkingDirectory = "%WORKING_DIR%" >> "%VBS_SCRIPT%"
 echo oLink.Description = "ASS Auto Segmentation Compute Worker [{w_name}]" >> "%VBS_SCRIPT%"
 echo oLink.Save >> "%VBS_SCRIPT%"
+
 cscript //nologo "%VBS_SCRIPT%"
 if exist "%VBS_SCRIPT%" del "%VBS_SCRIPT%"
-echo [OK] Ярлык скрытого запуска успешно добавлен в автозагрузку!
-echo Расположение: %STARTUP_DIR%\\ASS_Compute_Worker_{w_name.replace(' ', '_')}.lnk
+
+echo [OK] Startup shortcut successfully created:
+echo %SHORTCUT_PATH%
 echo.
-echo Воркер будет автоматически запускаться в фоне без консольного окна.
+echo The worker will now launch automatically in background on Windows boot.
 echo.
 pause
 """
                 remove_startup_text = f"""@echo off
 set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
-chcp 65001 > nul
+cd /d "%~dp0"
+
+echo ======================================================================
+echo   Removing ASS Worker [{w_name}] from Windows Startup
+echo ======================================================================
+echo.
+
 set "STARTUP_DIR=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
-if exist "%STARTUP_DIR%\\ASS_Compute_Worker_{w_name.replace(' ', '_')}.lnk" (
-    del "%STARTUP_DIR%\\ASS_Compute_Worker_{w_name.replace(' ', '_')}.lnk"
-    echo [OK] Ярлык воркера удален из автозагрузки Windows.
-) else (
-    echo [INFO] Ярлык автозагрузки не обнаружен.
+set "FOUND=0"
+
+if exist "%STARTUP_DIR%\\ASS_Compute_Worker*.lnk" (
+    del "%STARTUP_DIR%\\ASS_Compute_Worker*.lnk" 2>nul
+    echo [OK] Removed startup shortcuts matching ASS_Compute_Worker*.lnk
+    set "FOUND=1"
 )
+
+if "%FOUND%"=="0" (
+    echo [INFO] No ASS Worker startup shortcut found in:
+    echo %STARTUP_DIR%
+) else (
+    echo [OK] Successfully removed from Windows Startup.
+)
+
 echo.
 pause
 """
@@ -4264,6 +4333,8 @@ pause
                 entries.append(("data", ini_text.encode("utf-8"), "config/server_settings.ini"))
                 entries.append(("data", run_bat_text.encode("utf-8"), "run_worker.bat"))
                 entries.append(("data", run_no_console_text.encode("utf-8"), "run_worker_no_console.bat"))
+                entries.append(("data", status_worker_text.encode("utf-8"), "status_worker.bat"))
+                entries.append(("data", stop_worker_text.encode("utf-8"), "stop_worker.bat"))
                 entries.append(("data", add_startup_text.encode("utf-8"), "add_to_startup.bat"))
                 entries.append(("data", remove_startup_text.encode("utf-8"), "remove_from_startup.bat"))
                 entries.append(("data", setup_bat_text.encode("utf-8"), "setup_worker.bat"))

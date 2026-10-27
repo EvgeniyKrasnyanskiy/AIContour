@@ -7,6 +7,8 @@ if exist "%~dp0totalseg_home\nnunet" (
     set "TOTALSEG_WEIGHTS_PATH=%~dp0totalseg_home\nnunet\results"
 )
 
+if not exist "%~dp0logs" mkdir "%~dp0logs"
+
 if exist "%~dp0venv\pythonw.exe" (
     start "" "%~dp0venv\pythonw.exe" server\main.py
     exit /b 0
