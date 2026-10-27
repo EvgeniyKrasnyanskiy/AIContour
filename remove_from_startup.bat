@@ -7,21 +7,21 @@ echo   Removing ASS Worker from Windows Startup
 echo ======================================================================
 echo.
 
-set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
-set "FOUND=0"
+set "VBS_SCRIPT=%TEMP%\remove_worker_shortcut.vbs"
 
-if exist "%STARTUP_DIR%\ASS_Compute_Worker*.lnk" (
-    del "%STARTUP_DIR%\ASS_Compute_Worker*.lnk" 2>nul
-    echo [OK] Removed startup shortcuts matching ASS_Compute_Worker*.lnk
-    set "FOUND=1"
-)
+echo Set oWS = WScript.CreateObject("WScript.Shell") > "%VBS_SCRIPT%"
+echo Set oFSO = WScript.CreateObject("Scripting.FileSystemObject") >> "%VBS_SCRIPT%"
+echo sStartup = oWS.SpecialFolders("Startup") >> "%VBS_SCRIPT%"
+echo sLinkFile = sStartup ^& "\ASS_Compute_Worker.lnk" >> "%VBS_SCRIPT%"
+echo If oFSO.FileExists(sLinkFile) Then >> "%VBS_SCRIPT%"
+echo     oFSO.DeleteFile(sLinkFile) >> "%VBS_SCRIPT%"
+echo     WScript.Echo "[OK] Removed startup shortcut: " ^& sLinkFile >> "%VBS_SCRIPT%"
+echo Else >> "%VBS_SCRIPT%"
+echo     WScript.Echo "[INFO] Shortcut not found: " ^& sLinkFile >> "%VBS_SCRIPT%"
+echo End If >> "%VBS_SCRIPT%"
 
-if "%FOUND%"=="0" (
-    echo [INFO] No ASS Worker startup shortcut found in:
-    echo %STARTUP_DIR%
-) else (
-    echo [OK] Successfully removed from Windows Startup.
-)
+cscript //nologo "%VBS_SCRIPT%"
+if exist "%VBS_SCRIPT%" del "%VBS_SCRIPT%"
 
 echo.
 pause

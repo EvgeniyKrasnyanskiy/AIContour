@@ -4212,7 +4212,7 @@ start "" pythonw server\\main.py
 exit /b 0
 """
                 status_worker_text = f"""@echo off
-set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
+set "PATH=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0;%SystemRoot%\\System32;%SystemRoot%;%PATH%"
 chcp 65001 > nul
 cd /d "%~dp0"
 
@@ -4221,14 +4221,29 @@ echo   ASS Worker [{w_name}] - Status Checker
 echo ======================================================================
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -like 'python*' -and ($_.CommandLine -like '*server\\main.py*' -or $_.CommandLine -like '*server/main.py*') }}); if ($procs.Count -gt 0) {{ Write-Host '[STATUS] ASS Worker is RUNNING in background!' -ForegroundColor Green; foreach ($p in $procs) {{ Write-Host ('  -> Process: ' + $p.Name + ' (PID: ' + $p.ProcessId + ')') }} }} else {{ Write-Host '[STATUS] ASS Worker is STOPPED.' -ForegroundColor Yellow; Write-Host '  -> Launch run_worker.bat or run_worker_no_console.bat to start.' }}"
+set "PS_EXE=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+if exist "%PS_EXE%" (
+    "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "$procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -like 'python*' -and ($_.CommandLine -like '*server\\main.py*' -or $_.CommandLine -like '*server/main.py*') }}); if ($procs.Count -gt 0) {{ Write-Host '[STATUS] ASS Worker is RUNNING in background!' -ForegroundColor Green; foreach ($p in $procs) {{ Write-Host ('  -> Process: ' + $p.Name + ' (PID: ' + $p.ProcessId + ')') }} }} else {{ Write-Host '[STATUS] ASS Worker is STOPPED.' -ForegroundColor Yellow; Write-Host '  -> Launch run_worker.bat or run_worker_no_console.bat to start.' }}"
+) else (
+    echo [INFO] PowerShell not found, checking via tasklist...
+    for /f "tokens=2 delims=," %%A in ('tasklist /nh /fo csv /fi "imagename eq pythonw.exe" 2^>nul') do (
+        echo [RUNNING] Process pythonw.exe detected (PID: %%~A)
+    )
+    for /f "tokens=2 delims=," %%A in ('tasklist /nh /fo csv /fi "imagename eq python.exe" 2^>nul') do (
+        echo [RUNNING] Process python.exe detected (PID: %%~A)
+    )
+)
 
 echo.
 if exist "%~dp0logs\\server_backend.log" (
     echo ======================================================================
     echo   Last 10 lines of logs\\server_backend.log:
     echo ======================================================================
-    powershell -NoProfile -Command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Content -Path '%~dp0logs\\server_backend.log' -Tail 10 -Encoding UTF8" 2>nul
+    if exist "%PS_EXE%" (
+        "%PS_EXE%" -NoProfile -Command "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Content -Path '%~dp0logs\\server_backend.log' -Tail 10 -Encoding UTF8" 2>nul
+    ) else (
+        type "%~dp0logs\\server_backend.log"
+    )
     echo ======================================================================
 ) else (
     echo [INFO] Log file logs\\server_backend.log does not exist yet.
@@ -4238,7 +4253,7 @@ echo.
 pause
 """
                 stop_worker_text = f"""@echo off
-set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
+set "PATH=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0;%SystemRoot%\\System32;%SystemRoot%;%PATH%"
 cd /d "%~dp0"
 
 echo ======================================================================
@@ -4246,7 +4261,14 @@ echo   Stopping ASS Worker [{w_name}] background process...
 echo ======================================================================
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$stopped = 0; Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -like 'python*' -and ($_.CommandLine -like '*server\\main.py*' -or $_.CommandLine -like '*server/main.py*') }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force; Write-Host ('[STOPPED] Terminated worker process PID ' + $_.ProcessId); $stopped = 1 }}; if ($stopped -eq 0) {{ Write-Host '[INFO] No running ASS Worker process was found.' }}"
+set "PS_EXE=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+if exist "%PS_EXE%" (
+    "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "$stopped = 0; Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {{ $_.Name -like 'python*' -and ($_.CommandLine -like '*server\\main.py*' -or $_.CommandLine -like '*server/main.py*') }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force; Write-Host ('[STOPPED] Terminated worker process PID ' + $_.ProcessId); $stopped = 1 }}; if ($stopped -eq 0) {{ Write-Host '[INFO] No running ASS Worker process was found.' }}"
+) else (
+    echo [INFO] PowerShell not found, killing via taskkill...
+    taskkill /f /im pythonw.exe 2>nul
+    echo Worker process stopped if was active.
+)
 
 echo.
 echo Operation finished.
@@ -4264,22 +4286,21 @@ echo.
 
 set "TARGET_BAT=%~dp0run_worker_no_console.bat"
 set "WORKING_DIR=%~dp0"
-set "SHORTCUT_PATH=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\ASS_Compute_Worker_{w_name.replace(' ', '_')}.lnk"
-
 set "VBS_SCRIPT=%TEMP%\\create_worker_lnk_%RANDOM%.vbs"
+
 echo Set oWS = WScript.CreateObject("WScript.Shell") > "%VBS_SCRIPT%"
-echo sLinkFile = "%SHORTCUT_PATH%" >> "%VBS_SCRIPT%"
+echo sStartup = oWS.SpecialFolders("Startup") >> "%VBS_SCRIPT%"
+echo sLinkFile = sStartup ^& "\\ASS_Compute_Worker_{w_name.replace(' ', '_')}.lnk" >> "%VBS_SCRIPT%"
 echo Set oLink = oWS.CreateShortcut(sLinkFile) >> "%VBS_SCRIPT%"
 echo oLink.TargetPath = "%TARGET_BAT%" >> "%VBS_SCRIPT%"
 echo oLink.WorkingDirectory = "%WORKING_DIR%" >> "%VBS_SCRIPT%"
 echo oLink.Description = "ASS Auto Segmentation Compute Worker [{w_name}]" >> "%VBS_SCRIPT%"
 echo oLink.Save >> "%VBS_SCRIPT%"
+echo WScript.Echo "[OK] Startup shortcut successfully created: " ^& sLinkFile >> "%VBS_SCRIPT%"
 
 cscript //nologo "%VBS_SCRIPT%"
 if exist "%VBS_SCRIPT%" del "%VBS_SCRIPT%"
 
-echo [OK] Startup shortcut successfully created:
-echo %SHORTCUT_PATH%
 echo.
 echo The worker will now launch automatically in background on Windows boot.
 echo.
@@ -4294,21 +4315,21 @@ echo   Removing ASS Worker [{w_name}] from Windows Startup
 echo ======================================================================
 echo.
 
-set "STARTUP_DIR=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
-set "FOUND=0"
+set "VBS_SCRIPT=%TEMP%\\remove_worker_lnk_%RANDOM%.vbs"
 
-if exist "%STARTUP_DIR%\\ASS_Compute_Worker*.lnk" (
-    del "%STARTUP_DIR%\\ASS_Compute_Worker*.lnk" 2>nul
-    echo [OK] Removed startup shortcuts matching ASS_Compute_Worker*.lnk
-    set "FOUND=1"
-)
+echo Set oWS = WScript.CreateObject("WScript.Shell") > "%VBS_SCRIPT%"
+echo Set oFSO = WScript.CreateObject("Scripting.FileSystemObject") >> "%VBS_SCRIPT%"
+echo sStartup = oWS.SpecialFolders("Startup") >> "%VBS_SCRIPT%"
+echo sLinkFile = sStartup ^& "\\ASS_Compute_Worker_{w_name.replace(' ', '_')}.lnk" >> "%VBS_SCRIPT%"
+echo If oFSO.FileExists(sLinkFile) Then >> "%VBS_SCRIPT%"
+echo     oFSO.DeleteFile(sLinkFile) >> "%VBS_SCRIPT%"
+echo     WScript.Echo "[OK] Removed startup shortcut: " ^& sLinkFile >> "%VBS_SCRIPT%"
+echo Else >> "%VBS_SCRIPT%"
+echo     WScript.Echo "[INFO] Shortcut not found: " ^& sLinkFile >> "%VBS_SCRIPT%"
+echo End If >> "%VBS_SCRIPT%"
 
-if "%FOUND%"=="0" (
-    echo [INFO] No ASS Worker startup shortcut found in:
-    echo %STARTUP_DIR%
-) else (
-    echo [OK] Successfully removed from Windows Startup.
-)
+cscript //nologo "%VBS_SCRIPT%"
+if exist "%VBS_SCRIPT%" del "%VBS_SCRIPT%"
 
 echo.
 pause
