@@ -724,6 +724,112 @@ if PYQT_AVAILABLE:
             except Exception as e:
                 self.error_signal.emit(str(e))
 
+    class ViewerLoadWorker(QThread):
+        """Фоновый поток загрузки и формирования 3D-массива КТ для ImageViewer."""
+        loaded = pyqtSignal(str, object, list, tuple, list)
+        error = pyqtSignal(str)
+
+        def __init__(self, folder_path: str):
+            super().__init__()
+            self.folder_path = folder_path
+            self.is_cancelled = False
+
+        def cancel(self):
+            self.is_cancelled = True
+
+        def run(self):
+            try:
+                import pydicom
+                import numpy as np
+                folder_path = self.folder_path
+                if not folder_path or not os.path.isdir(folder_path):
+                    return
+                if self.is_cancelled:
+                    return
+
+                dcm_files = [
+                    os.path.join(folder_path, f) for f in os.listdir(folder_path)
+                    if os.path.isfile(os.path.join(folder_path, f)) and not f.startswith('.')
+                ]
+                slices = []
+                for f in dcm_files:
+                    if self.is_cancelled:
+                        return
+                    try:
+                        ds = pydicom.dcmread(f, stop_before_pixels=True)
+                        mod = str(getattr(ds, "Modality", "")).strip().upper()
+                        if mod in ["RTSTRUCT", "RTDOSE", "RTPLAN", "REG", "PR"]:
+                            continue
+                        if hasattr(ds, "PixelData") or mod in ["CT", "MR", "PT"]:
+                            ds = pydicom.dcmread(f)
+                            slices.append(ds)
+                    except Exception:
+                        pass
+
+                if not slices or self.is_cancelled:
+                    return
+
+                def get_slice_z(s):
+                    if hasattr(s, "ImagePositionPatient") and len(s.ImagePositionPatient) >= 3:
+                        try:
+                            return float(s.ImagePositionPatient[2])
+                        except Exception:
+                            pass
+                    if hasattr(s, "SliceLocation"):
+                        try:
+                            return float(s.SliceLocation)
+                        except Exception:
+                            pass
+                    if hasattr(s, "InstanceNumber"):
+                        try:
+                            return float(s.InstanceNumber)
+                        except Exception:
+                            pass
+                    return 0.0
+
+                slices.sort(key=get_slice_z)
+
+                volume = []
+                for s in slices:
+                    if self.is_cancelled:
+                        return
+                    try:
+                        image = s.pixel_array.astype(np.float32)
+                        slope = getattr(s, 'RescaleSlope', 1)
+                        intercept = getattr(s, 'RescaleIntercept', 0)
+                        image = image * slope + intercept
+                        volume.append(image)
+                    except Exception as pe:
+                        logger.warning(f"Ошибка чтения pixel_array среза: {pe}")
+
+                if not volume or self.is_cancelled:
+                    return
+
+                volume_3d = np.stack(volume)
+                mod = str(getattr(slices[0], "Modality", "CT")).strip().upper()
+                if mod == "CT":
+                    volume_3d = np.clip(volume_3d, -160, 240)
+
+                volume_3d = np.transpose(volume_3d, (0, 2, 1))
+                z_positions = [get_slice_z(s) for s in slices]
+                pixel_spacing = (
+                    float(getattr(slices[0], 'PixelSpacing', [1, 1])[0]),
+                    float(getattr(slices[0], 'PixelSpacing', [1, 1])[1])
+                )
+                if hasattr(slices[0], "ImagePositionPatient") and len(slices[0].ImagePositionPatient) >= 2:
+                    image_position = [
+                        float(slices[0].ImagePositionPatient[0]),
+                        float(slices[0].ImagePositionPatient[1]),
+                    ]
+                else:
+                    image_position = [0.0, 0.0]
+
+                if not self.is_cancelled:
+                    self.loaded.emit(folder_path, volume_3d, z_positions, pixel_spacing, image_position)
+            except Exception as e:
+                if not self.is_cancelled:
+                    self.error.emit(str(e))
+
     class SegmentationWorker(QThread):
         """Поток для вычислений сегментации через удаленный API сервер, чтобы GUI не зависал."""
         finished_signal = pyqtSignal(bool, str)
@@ -4066,100 +4172,27 @@ if PYQT_AVAILABLE:
         def update_viewer_with_dicom(self, folder_path: str):
             if not folder_path or not os.path.isdir(folder_path):
                 return
+            if getattr(self, "current_dicom_dir", None) == folder_path and getattr(self, "volume_3d_base", None) is not None:
+                return
+            if hasattr(self, '_viewer_loader_worker') and self._viewer_loader_worker and self._viewer_loader_worker.isRunning():
+                self._viewer_loader_worker.cancel()
+                self._viewer_loader_worker.wait(100)
+
+            self._viewer_loader_worker = ViewerLoadWorker(folder_path)
+            self._viewer_loader_worker.loaded.connect(self._on_viewer_dicom_loaded)
+            self._viewer_loader_worker.error.connect(lambda err: logger.warning(f"Ошибка фоновой загрузки DICOM: {err}"))
+            self._viewer_loader_worker.start()
+
+        def _on_viewer_dicom_loaded(self, folder_path, volume_3d, z_positions, spacing, img_pos):
             try:
-                import pydicom
-                import numpy as np
-                
-                dcm_files = [
-                    os.path.join(folder_path, f) for f in os.listdir(folder_path)
-                    if os.path.isfile(os.path.join(folder_path, f)) and not f.startswith('.')
-                ]
-                slices = []
-                for f in dcm_files:
-                    try:
-                        ds = pydicom.dcmread(f, stop_before_pixels=True)
-                        mod = str(getattr(ds, "Modality", "")).strip().upper()
-                        # Исключаем неграфические объекты RT
-                        if mod in ["RTSTRUCT", "RTDOSE", "RTPLAN", "REG", "PR"]:
-                            continue
-                        # Принимаем срезы КТ, МРТ или объекты с изображениями
-                        if hasattr(ds, "PixelData") or mod in ["CT", "MR", "PT"]:
-                            ds = pydicom.dcmread(f)
-                            slices.append(ds)
-                    except Exception:
-                        pass
-                
-                if not slices:
-                    logger.warning(f"В папке '{folder_path}' не найдено срезов DICOM для отображения.")
-                    return
-                    
-                # Безопасное определение Z-координаты среза
-                def get_slice_z(s):
-                    if hasattr(s, "ImagePositionPatient") and len(s.ImagePositionPatient) >= 3:
-                        try:
-                            return float(s.ImagePositionPatient[2])
-                        except Exception:
-                            pass
-                    if hasattr(s, "SliceLocation"):
-                        try:
-                            return float(s.SliceLocation)
-                        except Exception:
-                            pass
-                    if hasattr(s, "InstanceNumber"):
-                        try:
-                            return float(s.InstanceNumber)
-                        except Exception:
-                            pass
-                    return 0.0
-
-                slices.sort(key=get_slice_z)
-                
-                # Формирование 3D массива с учетом HU (RescaleSlope/Intercept)
-                volume = []
-                for s in slices:
-                    try:
-                        image = s.pixel_array.astype(np.float32)
-                        slope = getattr(s, 'RescaleSlope', 1)
-                        intercept = getattr(s, 'RescaleIntercept', 0)
-                        image = image * slope + intercept
-                        volume.append(image)
-                    except Exception as pe:
-                        logger.warning(f"Ошибка чтения pixel_array среза: {pe}")
-                        
-                if not volume:
-                    logger.warning("Не удалось извлечь пиксельные данные из срезов.")
-                    return
-
-                volume_3d = np.stack(volume)
-                
-                # Коррекция Window Level (Контраста) для КТ
-                mod = str(getattr(slices[0], "Modality", "CT")).strip().upper()
-                if mod == "CT":
-                    volume_3d = np.clip(volume_3d, -160, 240)
-                
-                # Транспонирование для правильной ориентации в pyqtgraph
-                volume_3d = np.transpose(volume_3d, (0, 2, 1))
-                
                 self.volume_3d_base = volume_3d
                 self.current_dicom_dir = folder_path
-                # Сохраняем Z-позиции срезов для корректного slice-by-slice маппинга контуров
-                self.z_positions = [get_slice_z(s) for s in slices]
-                self.dicom_pixel_spacing = (
-                    float(getattr(slices[0], 'PixelSpacing', [1, 1])[0]),
-                    float(getattr(slices[0], 'PixelSpacing', [1, 1])[1])
-                )
-                if hasattr(slices[0], "ImagePositionPatient") and len(slices[0].ImagePositionPatient) >= 2:
-                    self.dicom_image_position = [
-                        float(slices[0].ImagePositionPatient[0]),
-                        float(slices[0].ImagePositionPatient[1]),
-                    ]
-                else:
-                    self.dicom_image_position = [0.0, 0.0]
+                self.z_positions = z_positions
+                self.dicom_pixel_spacing = spacing
+                self.dicom_image_position = img_pos
 
                 self.dicom_viewer.setImage(self.volume_3d_base)
-                
-                # Устанавливаем центральный срез для наглядного отображения пациента
-                mid_idx = len(slices) // 2
+                mid_idx = len(z_positions) // 2
                 self.dicom_viewer.setCurrentIndex(mid_idx)
                 self.dicom_viewer.autoLevels()
                 if hasattr(self.dicom_viewer, "getView"):
@@ -4167,12 +4200,10 @@ if PYQT_AVAILABLE:
                         self.dicom_viewer.getView().autoRange()
                     except Exception:
                         pass
-                
-                # Принудительно вызываем обновление оверлея если галка включена
                 if hasattr(self, 'chk_show_structures') and self.chk_show_structures.isChecked():
                     self.on_show_structures_changed()
             except Exception as e:
-                logger.warning(f"Не удалось загрузить DICOM во вьюер: {e}")
+                logger.warning(f"Не удалось отобразить DICOM во вьюере: {e}")
 
         def _clear_imported_organs(self):
             """Удаляет все динамически импортированные сторонние органы из списка."""

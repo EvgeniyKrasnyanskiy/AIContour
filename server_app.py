@@ -463,6 +463,112 @@ if PYQT_AVAILABLE:
             except Exception as e:
                 self.error_signal.emit(str(e))
 
+    class ViewerLoadWorker(QThread):
+        """Фоновый поток загрузки и формирования 3D-массива КТ для ImageViewer."""
+        loaded = pyqtSignal(str, object, list, tuple, list)
+        error = pyqtSignal(str)
+
+        def __init__(self, folder_path: str):
+            super().__init__()
+            self.folder_path = folder_path
+            self.is_cancelled = False
+
+        def cancel(self):
+            self.is_cancelled = True
+
+        def run(self):
+            try:
+                import pydicom
+                import numpy as np
+                folder_path = self.folder_path
+                if not folder_path or not os.path.isdir(folder_path):
+                    return
+                if self.is_cancelled:
+                    return
+
+                dcm_files = [
+                    os.path.join(folder_path, f) for f in os.listdir(folder_path)
+                    if os.path.isfile(os.path.join(folder_path, f)) and not f.startswith('.')
+                ]
+                slices = []
+                for f in dcm_files:
+                    if self.is_cancelled:
+                        return
+                    try:
+                        ds = pydicom.dcmread(f, stop_before_pixels=True)
+                        mod = str(getattr(ds, "Modality", "")).strip().upper()
+                        if mod in ["RTSTRUCT", "RTDOSE", "RTPLAN", "REG", "PR"]:
+                            continue
+                        if hasattr(ds, "PixelData") or mod in ["CT", "MR", "PT"]:
+                            ds = pydicom.dcmread(f)
+                            slices.append(ds)
+                    except Exception:
+                        pass
+
+                if not slices or self.is_cancelled:
+                    return
+
+                def get_slice_z(s):
+                    if hasattr(s, "ImagePositionPatient") and len(s.ImagePositionPatient) >= 3:
+                        try:
+                            return float(s.ImagePositionPatient[2])
+                        except Exception:
+                            pass
+                    if hasattr(s, "SliceLocation"):
+                        try:
+                            return float(s.SliceLocation)
+                        except Exception:
+                            pass
+                    if hasattr(s, "InstanceNumber"):
+                        try:
+                            return float(s.InstanceNumber)
+                        except Exception:
+                            pass
+                    return 0.0
+
+                slices.sort(key=get_slice_z)
+
+                volume = []
+                for s in slices:
+                    if self.is_cancelled:
+                        return
+                    try:
+                        image = s.pixel_array.astype(np.float32)
+                        slope = getattr(s, 'RescaleSlope', 1)
+                        intercept = getattr(s, 'RescaleIntercept', 0)
+                        image = image * slope + intercept
+                        volume.append(image)
+                    except Exception as pe:
+                        logger.warning(f"Ошибка чтения pixel_array среза: {pe}")
+
+                if not volume or self.is_cancelled:
+                    return
+
+                volume_3d = np.stack(volume)
+                mod = str(getattr(slices[0], "Modality", "CT")).strip().upper()
+                if mod == "CT":
+                    volume_3d = np.clip(volume_3d, -160, 240)
+
+                volume_3d = np.transpose(volume_3d, (0, 2, 1))
+                z_positions = [get_slice_z(s) for s in slices]
+                pixel_spacing = (
+                    float(getattr(slices[0], 'PixelSpacing', [1, 1])[0]),
+                    float(getattr(slices[0], 'PixelSpacing', [1, 1])[1])
+                )
+                if hasattr(slices[0], "ImagePositionPatient") and len(slices[0].ImagePositionPatient) >= 2:
+                    image_position = [
+                        float(slices[0].ImagePositionPatient[0]),
+                        float(slices[0].ImagePositionPatient[1]),
+                    ]
+                else:
+                    image_position = [0.0, 0.0]
+
+                if not self.is_cancelled:
+                    self.loaded.emit(folder_path, volume_3d, z_positions, pixel_spacing, image_position)
+            except Exception as e:
+                if not self.is_cancelled:
+                    self.error.emit(str(e))
+
     class SegmentationWorker(QThread):
         """Поток для вычислений сегментации через удаленный API сервер, чтобы GUI не зависал."""
         finished_signal = pyqtSignal(bool, str)
@@ -1701,16 +1807,286 @@ if PYQT_AVAILABLE:
                 self.build_thread.stop()
             super().reject()
 
+    class ZipPackageThread(QThread):
+        """Фоновый поток для потокового создания ZIP-пакетов без зависания интерфейса."""
+        progress_signal = pyqtSignal(int, int, int, str, float)  # (percent, processed_bytes, total_bytes, current_file, speed_mb)
+        status_signal = pyqtSignal(str)
+        finished_signal = pyqtSignal(bool, str, int)  # (success, error_msg, final_size_bytes)
+
+        def __init__(self, output_zip_path: Path, entries: list, compresslevel: int = 1, parent=None):
+            super().__init__(parent)
+            self.output_zip_path = Path(output_zip_path)
+            self.entries = entries
+            self.compresslevel = compresslevel
+            self.is_cancelled = False
+
+        def cancel(self):
+            self.is_cancelled = True
+
+        def run(self):
+            import os, sys, time, zipfile
+            from pathlib import Path
+
+            self.status_signal.emit("Анализ и подсчет объема файлов для упаковки...")
+            file_tasks = []
+            total_bytes = 0
+
+            try:
+                for entry in self.entries:
+                    if self.is_cancelled:
+                        self.finished_signal.emit(False, "Отменено пользователем.", 0)
+                        return
+
+                    kind = entry[0]
+                    if kind == "data":
+                        _, data_bytes, arcname = entry
+                        if isinstance(data_bytes, str):
+                            data_bytes = data_bytes.encode("utf-8")
+                        total_bytes += len(data_bytes)
+                        file_tasks.append(("data", arcname, data_bytes, len(data_bytes)))
+                    elif kind == "file":
+                        _, src_path, arcname = entry
+                        p = Path(src_path)
+                        if p.exists() and p.is_file():
+                            sz = p.stat().st_size
+                            total_bytes += sz
+                            file_tasks.append(("file", arcname, p, sz))
+                    elif kind == "dir":
+                        _, dir_path, arc_prefix, excludes = entry
+                        p = Path(dir_path)
+                        if p.exists() and p.is_dir():
+                            for root, dirs, files in os.walk(p):
+                                if self.is_cancelled:
+                                    self.finished_signal.emit(False, "Отменено пользователем.", 0)
+                                    return
+                                dirs[:] = [d for d in dirs if not any(ex in d for ex in excludes)]
+                                for f in files:
+                                    if any(f.endswith(ex) or ex in f for ex in excludes):
+                                        continue
+                                    fp = Path(root) / f
+                                    rel = fp.relative_to(p)
+                                    arcname = f"{arc_prefix}/{rel.as_posix()}" if arc_prefix else rel.as_posix()
+                                    try:
+                                        sz = fp.stat().st_size
+                                        total_bytes += sz
+                                        file_tasks.append(("file", arcname, fp, sz))
+                                    except Exception:
+                                        pass
+
+                if total_bytes == 0:
+                    total_bytes = 1
+
+                self.status_signal.emit("Сжатие файлов в архив...")
+                processed_bytes = 0
+                start_time = time.time()
+                last_emit_time = 0
+
+                self.output_zip_path.parent.mkdir(parents=True, exist_ok=True)
+
+                with zipfile.ZipFile(
+                    self.output_zip_path,
+                    mode="w",
+                    compression=zipfile.ZIP_DEFLATED,
+                    compresslevel=self.compresslevel,
+                    allowZip64=True
+                ) as zf:
+                    for task in file_tasks:
+                        if self.is_cancelled:
+                            break
+
+                        kind = task[0]
+                        if kind == "data":
+                            _, arcname, data_bytes, sz = task
+                            zf.writestr(arcname, data_bytes)
+                            processed_bytes += sz
+                        elif kind == "file":
+                            _, arcname, src_file, sz = task
+                            chunk_size = 2 * 1024 * 1024  # 2 МБ
+                            try:
+                                with open(src_file, "rb") as sf:
+                                    with zf.open(arcname, "w", force_zip64=True) as df:
+                                        while True:
+                                            if self.is_cancelled:
+                                                break
+                                            chunk = sf.read(chunk_size)
+                                            if not chunk:
+                                                break
+                                            df.write(chunk)
+                                            processed_bytes += len(chunk)
+                                            
+                                            now = time.time()
+                                            if now - last_emit_time >= 0.15 or processed_bytes >= total_bytes:
+                                                last_emit_time = now
+                                                elapsed = max(0.1, now - start_time)
+                                                speed_mb = (processed_bytes / (1024 * 1024)) / elapsed
+                                                pct = min(99, int((processed_bytes / total_bytes) * 100))
+                                                self.progress_signal.emit(pct, processed_bytes, total_bytes, arcname, speed_mb)
+                            except Exception as fe:
+                                logger.warning(f"Пропуск файла {src_file}: {fe}")
+                                processed_bytes += sz
+
+                if self.is_cancelled:
+                    if self.output_zip_path.exists():
+                        try:
+                            self.output_zip_path.unlink()
+                        except Exception:
+                            pass
+                    self.finished_signal.emit(False, "Создание архива отменено пользователем.", 0)
+                    return
+
+                final_size = self.output_zip_path.stat().st_size if self.output_zip_path.exists() else 0
+                self.progress_signal.emit(100, total_bytes, total_bytes, "Завершено!", 0.0)
+                self.finished_signal.emit(True, "", final_size)
+
+            except Exception as e:
+                if self.output_zip_path.exists():
+                    try:
+                        self.output_zip_path.unlink()
+                    except Exception:
+                        pass
+                self.finished_signal.emit(False, str(e), 0)
+
+    class PackageProgressDialog(QDialog):
+        """Интерактивное окно прогресса упаковки ZIP-пакетов с живым счетчиком МБ, скорости и ETA."""
+        def __init__(self, title: str, header_text: str, output_zip_path: Path, file_entries: list, compresslevel: int = 1, parent=None):
+            super().__init__(parent)
+            self.setWindowTitle(title)
+            self.setMinimumSize(620, 260)
+            self.resize(640, 280)
+            self.setStyleSheet("""
+                QDialog { background-color: #2f3542; color: #ffffff; }
+                QLabel { color: #ffffff; font-size: 12px; }
+                QProgressBar { border: 1px solid #57606f; border-radius: 4px; text-align: center; background-color: #1e272e; color: white; height: 22px; font-weight: bold; }
+                QProgressBar::chunk { background-color: #00d2d3; border-radius: 3px; }
+                QPushButton { background-color: #57606f; color: white; padding: 7px 20px; border-radius: 4px; font-weight: bold; font-size: 12px; }
+                QPushButton:hover { background-color: #747d8c; }
+            """)
+
+            layout = QVBoxLayout(self)
+            layout.setSpacing(12)
+
+            self.lbl_head = QLabel(f"<b>{header_text}</b>")
+            self.lbl_head.setStyleSheet("font-size: 14px; color: #00d2d3;")
+            layout.addWidget(self.lbl_head)
+
+            self.lbl_status = QLabel("Подготовка к формированию пакета...")
+            self.lbl_status.setStyleSheet("color: #a4b0be; font-size: 11px;")
+            self.lbl_status.setWordWrap(True)
+            layout.addWidget(self.lbl_status)
+
+            self.progress_bar = QProgressBar()
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(0)
+            layout.addWidget(self.progress_bar)
+
+            self.lbl_details = QLabel("0 МБ / 0 МБ (0%)")
+            self.lbl_details.setStyleSheet("color: #ced6e0; font-size: 11px;")
+            layout.addWidget(self.lbl_details)
+
+            self.lbl_file = QLabel("")
+            self.lbl_file.setStyleSheet("color: #747d8c; font-family: Consolas, monospace; font-size: 10px;")
+            self.lbl_file.setWordWrap(True)
+            layout.addWidget(self.lbl_file)
+
+            layout.addStretch()
+
+            btn_layout = QHBoxLayout()
+            btn_layout.addStretch()
+            self.btn_action = QPushButton("Отмена")
+            self.btn_action.clicked.connect(self.on_cancel_or_close)
+            btn_layout.addWidget(self.btn_action)
+            layout.addLayout(btn_layout)
+
+            self.thread = ZipPackageThread(output_zip_path, file_entries, compresslevel, self)
+            self.thread.status_signal.connect(self.on_status_updated)
+            self.thread.progress_signal.connect(self.on_progress_updated)
+            self.thread.finished_signal.connect(self.on_packaging_finished)
+
+            self.is_success = False
+            self.error_msg = ""
+            self.final_size = 0
+
+        def start_packaging(self):
+            self.thread.start()
+
+        def on_status_updated(self, text: str):
+            self.lbl_status.setText(text)
+
+        def on_progress_updated(self, percent: int, curr_b: int, total_b: int, cur_file: str, speed_mb: float):
+            self.progress_bar.setValue(percent)
+            curr_mb = curr_b / (1024 * 1024)
+            tot_mb = total_b / (1024 * 1024)
+            
+            rem_sec_str = ""
+            if speed_mb > 0.05 and curr_b < total_b:
+                rem_bytes = total_b - curr_b
+                rem_sec = int((rem_bytes / (1024 * 1024)) / speed_mb)
+                if rem_sec > 60:
+                    rem_sec_str = f" • Осталось: ~{rem_sec // 60} мин {rem_sec % 60} сек"
+                else:
+                    rem_sec_str = f" • Осталось: ~{rem_sec} сек"
+
+            if tot_mb > 1024:
+                curr_gb = curr_mb / 1024
+                tot_gb = tot_mb / 1024
+                self.lbl_details.setText(f"{curr_gb:.2f} ГБ / {tot_gb:.2f} ГБ ({percent}%) • {speed_mb:.1f} МБ/с{rem_sec_str}")
+            else:
+                self.lbl_details.setText(f"{curr_mb:.1f} МБ / {tot_mb:.1f} МБ ({percent}%) • {speed_mb:.1f} МБ/с{rem_sec_str}")
+
+            short_name = cur_file
+            if len(short_name) > 65:
+                short_name = "..." + short_name[-62:]
+            self.lbl_file.setText(f"Файл: {short_name}")
+
+        def on_packaging_finished(self, success: bool, error_msg: str, final_size: int):
+            self.is_success = success
+            self.error_msg = error_msg
+            self.final_size = final_size
+
+            if success:
+                self.progress_bar.setValue(100)
+                sz_str = f"{final_size / (1024*1024*1024):.2f} ГБ" if final_size > 1024*1024*1024 else f"{final_size / (1024*1024):.1f} МБ"
+                self.lbl_head.setText("<b>✅ Архив успешно сформирован!</b>")
+                self.lbl_head.setStyleSheet("font-size: 14px; color: #2ed573;")
+                self.lbl_status.setText(f"Пакет готов к переносу на целевой компьютер. Итоговый размер архива: <b>{sz_str}</b>")
+                self.lbl_file.setText("")
+                self.btn_action.setText("Готово")
+                self.btn_action.setStyleSheet("background-color: #2ed573; color: white;")
+                self.accept()
+            else:
+                self.lbl_head.setText("<b>❌ Ошибка формирования архива</b>")
+                self.lbl_head.setStyleSheet("font-size: 14px; color: #ff4757;")
+                self.lbl_status.setText(f"Не удалось завершить создание архива:\n{error_msg}")
+                self.btn_action.setText("Закрыть")
+                self.btn_action.setStyleSheet("background-color: #ff4757; color: white;")
+
+        def on_cancel_or_close(self):
+            if self.thread.isRunning():
+                self.thread.cancel()
+                self.lbl_status.setText("Отмена операции и очистка неполного архива...")
+                self.thread.wait(2000)
+            if self.is_success:
+                self.accept()
+            else:
+                self.reject()
+
+        def reject(self):
+            self.on_cancel_or_close()
+            super().reject()
+
     class CreateWorkerDialog(QDialog):
         """Диалоговое окно настройки и экспорта пакета вычислительного узла (Worker)."""
         def __init__(self, default_name: str, default_id: str, default_master_url: str, parent=None):
             super().__init__(parent)
             self.setWindowTitle("➕ Создание пакета нового воркера (Compute Node)")
-            self.resize(540, 360)
+            self.setMinimumSize(560, 480)
+            self.resize(580, 500)
             self.setStyleSheet("""
                 QDialog { background-color: #2f3542; color: #ffffff; }
                 QLabel { color: #ffffff; font-size: 12px; }
                 QLineEdit { background-color: #1e272e; color: #ffffff; border: 1px solid #57606f; border-radius: 4px; padding: 6px; font-size: 12px; }
+                QCheckBox { color: #ffffff; font-size: 12px; spacing: 8px; }
+                QCheckBox::indicator { width: 16px; height: 16px; }
                 QPushButton#btnSave { background-color: #00d2d3; color: #1e272e; padding: 8px 18px; border-radius: 4px; font-weight: bold; font-size: 12px; }
                 QPushButton#btnSave:hover { background-color: #01a3a4; }
                 QPushButton#btnCancel { background-color: #57606f; color: white; padding: 8px 18px; border-radius: 4px; font-weight: bold; font-size: 12px; }
@@ -1718,15 +2094,15 @@ if PYQT_AVAILABLE:
             """)
 
             layout = QVBoxLayout(self)
-            layout.setSpacing(12)
+            layout.setSpacing(10)
 
             lbl_head = QLabel("<b>⚡ Параметры нового вычислительного узла (Worker)</b>")
             lbl_head.setStyleSheet("font-size: 14px; color: #00d2d3;")
             layout.addWidget(lbl_head)
 
             lbl_desc = QLabel(
-                "Будет сформирован готовый архив настроек и скриптов запуска для развертывания "
-                "на компьютере с 16 ГБ ОЗУ в сети клиники. Воркер автоматически подключится к серверу."
+                "Формирует полностью автономный ZIP-дистрибутив для ПК в сети клиники с 16 ГБ ОЗУ.<br>"
+                "Пакет содержит все зависимости, окружение и веса ИИ для мгновенного запуска 'из коробки'."
             )
             lbl_desc.setWordWrap(True)
             lbl_desc.setStyleSheet("color: #a4b0be; font-size: 11px;")
@@ -1743,6 +2119,25 @@ if PYQT_AVAILABLE:
             layout.addWidget(QLabel("Сетевой адрес Master-сервера (URL):"))
             self.url_edit = QLineEdit(default_master_url)
             layout.addWidget(self.url_edit)
+
+            lbl_comp_opts = QLabel("<b>📦 Состав автономного пакета:</b>")
+            lbl_comp_opts.setStyleSheet("color: #00d2d3; font-size: 12px; margin-top: 6px;")
+            layout.addWidget(lbl_comp_opts)
+
+            self.chk_include_venv = QCheckBox("Включить автономное окружение Python + PyTorch (venv, ~5.7 ГБ)")
+            self.chk_include_venv.setChecked(True)
+            self.chk_include_venv.setToolTip("Рекомендуется для ПК без доступа в интернет. Воркер запустится сразу без установки Python.")
+            layout.addWidget(self.chk_include_venv)
+
+            self.chk_include_models = QCheckBox("Включить веса нейросетей TotalSegmentator (~1.3 ГБ)")
+            self.chk_include_models.setChecked(True)
+            self.chk_include_models.setToolTip("Включает предобученные веса моделей из кэша сервера, чтобы узел мог оконтуривать оффлайн.")
+            layout.addWidget(self.chk_include_models)
+
+            self.chk_fast_compression = QCheckBox("Быстрое сжатие (рекомендуется для больших пакетов >1 ГБ)")
+            self.chk_fast_compression.setChecked(True)
+            self.chk_fast_compression.setToolTip("Сжатие уровня 1 ускоряет сборку в 3-4 раза при минимальной разнице в итоговом размере.")
+            layout.addWidget(self.chk_fast_compression)
 
             layout.addStretch()
 
@@ -1765,7 +2160,10 @@ if PYQT_AVAILABLE:
             return {
                 "name": self.name_edit.text().strip(),
                 "id": self.id_edit.text().strip(),
-                "master_url": self.url_edit.text().strip()
+                "master_url": self.url_edit.text().strip(),
+                "include_venv": self.chk_include_venv.isChecked(),
+                "include_models": self.chk_include_models.isChecked(),
+                "fast_compression": self.chk_fast_compression.isChecked()
             }
 
     class MainWindow(QMainWindow):
@@ -3489,22 +3887,37 @@ elekta_monaco_port=104
 chcp 65001 > nul
 start "" "ASS_Client.exe"
 """
-                with zipfile.ZipFile(save_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                    zf.write(client_binary, "ASS_Client.exe")
-                    zf.writestr("config/client_settings.ini", ini_content)
-                    zf.writestr("run_client.bat", bat_content)
+                entries = [
+                    ("file", client_binary, "ASS_Client.exe"),
+                    ("data", ini_content.encode("utf-8"), "config/client_settings.ini"),
+                    ("data", bat_content.encode("utf-8"), "run_client.bat")
+                ]
+                for icon in ["icon_client.ico", "icon_client.png"]:
+                    p = Path(icon)
+                    if p.exists():
+                        entries.append(("file", p, icon))
 
-                    for icon in ["icon_client.ico", "icon_client.png"]:
-                        p = Path(icon)
-                        if p.exists():
-                            zf.write(p, icon)
+                pkg_dlg = PackageProgressDialog(
+                    title="📦 Экспорт преднастроенного клиента ASS",
+                    header_text="Упаковка преднастроенного клиента ASS_Client.exe...",
+                    output_zip_path=Path(save_path),
+                    file_entries=entries,
+                    compresslevel=1,
+                    parent=self
+                )
+                pkg_dlg.start_packaging()
+                if pkg_dlg.exec() != QDialog.DialogCode.Accepted or not pkg_dlg.is_success:
+                    if pkg_dlg.error_msg and not pkg_dlg.is_success:
+                        QMessageBox.critical(self, "Ошибка экспорта", f"Не удалось сформировать архив:\n{pkg_dlg.error_msg}")
+                    return
 
+                sz_mb = pkg_dlg.final_size / (1024 * 1024)
                 QMessageBox.information(
                     self,
                     "Экспорт завершен",
                     f"Преднастроенный архив клиента успешно сформирован:\n{save_path}\n\n"
                     f"В файл config/client_settings.ini уже прописан адрес сервера: http://{local_ip}:8000.\n"
-                    f"Размер исполняемого файла: {client_binary.stat().st_size / (1024*1024):.1f} МБ.\n"
+                    f"Размер архива: {sz_mb:.1f} МБ.\n"
                     f"Врачам достаточно просто распаковать архив и запустить ASS_Client.exe!"
                 )
             except Exception as e:
@@ -3512,7 +3925,7 @@ start "" "ASS_Client.exe"
 
         def create_worker_package_dialog(self):
             """Формирует преднастроенный ZIP-пакет для подключения нового вычислительного узла (Worker)."""
-            import re, uuid, json, zipfile
+            import re, uuid, json
             from pathlib import Path
             from PyQt6.QtWidgets import QFileDialog, QMessageBox
             from src.network.discovery import get_local_ip
@@ -3557,6 +3970,10 @@ start "" "ASS_Client.exe"
             w_name = vals["name"] or default_name
             w_id = vals["id"] or default_id
             m_url = vals["master_url"] or default_url
+            include_venv = vals.get("include_venv", True)
+            include_models = vals.get("include_models", True)
+            fast_comp = vals.get("fast_compression", True)
+            compress_level = 1 if fast_comp else 6
 
             default_zip = f"ASS_Worker_{w_name.replace(' ', '_')}.zip"
             save_path, _ = QFileDialog.getSaveFileName(
@@ -3577,6 +3994,7 @@ master_url={m_url}
 temp_dir=
 """
                 run_bat_text = f"""@echo off
+chcp 65001 > nul
 title ASS - Compute Worker [{w_name}]
 cd /d "%~dp0"
 echo ======================================================================
@@ -3587,26 +4005,33 @@ echo   Master URL  : {m_url}
 echo ======================================================================
 echo.
 
-echo [1/2] Activating virtual environment (venv)...
-if not exist "venv\\Scripts\\activate.bat" (
+if exist "%~dp0totalseg_home\\nnunet" (
+    set "TOTALSEG_HOME_DIR=%~dp0totalseg_home"
+    set "TOTALSEG_WEIGHTS_PATH=%~dp0totalseg_home\\nnunet\\results"
+    echo [INFO] Offline TotalSegmentator AI weights activated: %~dp0totalseg_home
+)
+
+echo [1/2] Activating Python virtual environment...
+if not exist "venv\\Scripts\\python.exe" (
     echo [ERROR] Virtual environment 'venv' not found in %~dp0
-    echo Please make sure the venv folder with PyTorch and TotalSegmentator exists.
-    echo If this is a new PC, run setup_worker.bat first.
+    echo Please make sure the venv folder was unpacked from the archive.
     pause
     exit /b 1
 )
 
 call venv\\Scripts\\activate.bat
 
-echo [2/2] Starting ASS Worker Service on port 8000...
+echo [2/2] Starting ASS Worker Service...
 venv\\Scripts\\python.exe server\\main.py
 
 if %errorlevel% neq 0 (
+    echo.
     echo [WARNING] Worker exited with code %errorlevel%
     pause
 )
 """
                 setup_bat_text = """@echo off
+chcp 65001 > nul
 title ASS - Worker Environment Setup
 cd /d "%~dp0"
 echo ======================================================================
@@ -3641,23 +4066,72 @@ pause
 Имя узла       : {w_name}
 ID воркера     : {w_id}
 Мастер-сервер  : {m_url}
+Окружение venv : {'Включено (готово к работе)' if include_venv else 'Не включено (требуется запустить setup_worker.bat)'}
+Веса моделей   : {'Включены (автономная работа без интернета)' if include_models else 'Будут скачаны при первом запуске'}
 Требования     : Компьютер в локальной сети клиники с 16 ГБ ОЗУ (CPU или GPU)
 
 ИНСТРУКЦИЯ ПО РАЗВЕРТЫВАНИЮ:
-1. Скопируйте файлы ASS (код и окружение venv) на компьютер воркера.
-2. Поместите файл server_settings.ini в папку config/ на компьютере воркера.
-3. Запустите run_worker.bat.
-4. Воркер автоматически подключится к Мастеру ({m_url}) и каждые 4 секунды
-   будет передавать heartbeat.
+1. Распакуйте содержимое данного архива в любую папку на компьютере воркера
+   (например, C:\\ASS_Worker).
+2. Запустите файл run_worker.bat от имени обычного пользователя.
+3. Воркер запустит вычислительный процесс и автоматически подключится к серверу:
+   {m_url}
+4. Каждые 4 секунды воркер отправляет heartbeat и сообщает о готовности к расчету.
 5. На главном сервере во вкладке «Кластер» узел {w_name} моментально появится
-   со статусом «Свободен» (зеленый индикатор).
+   со статусом «Свободен» (зеленый индикатор) и начнет параллельно обрабатывать КТ.
 ================================================================================
 """
-                with zipfile.ZipFile(save_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                    zf.writestr("config/server_settings.ini", ini_text)
-                    zf.writestr("run_worker.bat", run_bat_text)
-                    zf.writestr("setup_worker.bat", setup_bat_text)
-                    zf.writestr("README_WORKER.txt", readme_text)
+                entries = []
+
+                # 1. Серверный бэкенд
+                entries.append(("dir", Path("server"), "server", [".pyc", "__pycache__", ".log"]))
+
+                # 2. Исходный код модулей движка и утилит
+                entries.append(("dir", Path("src"), "src", [".pyc", "__pycache__", ".log"]))
+
+                # 3. Конфигурационные файлы
+                if Path("config/presets").exists():
+                    entries.append(("dir", Path("config/presets"), "config/presets", []))
+                for cfg_name in ["colors.json", "licenses.json", "structure_names.json", "translations.json"]:
+                    p = Path("config") / cfg_name
+                    if p.exists():
+                        entries.append(("file", p, f"config/{cfg_name}"))
+
+                # 4. Файлы запуска и настройки воркера
+                entries.append(("data", ini_text.encode("utf-8"), "config/server_settings.ini"))
+                entries.append(("data", run_bat_text.encode("utf-8"), "run_worker.bat"))
+                entries.append(("data", setup_bat_text.encode("utf-8"), "setup_worker.bat"))
+                entries.append(("data", readme_text.encode("utf-8"), "README_WORKER.txt"))
+
+                # 5. Корневые модули
+                for root_file in ["version.py", "requirements.txt"]:
+                    p = Path(root_file)
+                    if p.exists():
+                        entries.append(("file", p, root_file))
+
+                # 6. Окружение Python + PyTorch (venv)
+                if include_venv and Path("venv").exists():
+                    entries.append(("dir", Path("venv"), "venv", [".tmp", ".log", "__pycache__"]))
+
+                # 7. Веса TotalSegmentator (автономная работа без интернета)
+                if include_models:
+                    totalseg_home = Path.home() / ".totalsegmentator"
+                    if totalseg_home.exists():
+                        entries.append(("dir", totalseg_home, "totalseg_home", [".tmp", "__MACOSX"]))
+
+                pkg_dlg = PackageProgressDialog(
+                    title=f"📦 Создание пакета воркера [{w_name}]",
+                    header_text=f"Формирование автономного пакета воркера '{w_name}'...",
+                    output_zip_path=Path(save_path),
+                    file_entries=entries,
+                    compresslevel=compress_level,
+                    parent=self
+                )
+                pkg_dlg.start_packaging()
+                if pkg_dlg.exec() != QDialog.DialogCode.Accepted or not pkg_dlg.is_success:
+                    if pkg_dlg.error_msg and not pkg_dlg.is_success:
+                        QMessageBox.critical(self, "Ошибка создания воркера", f"Не удалось сформировать архив воркера:\n{pkg_dlg.error_msg}")
+                    return
 
                 registered.append({
                     "id": w_id,
@@ -3668,16 +4142,20 @@ ID воркера     : {w_id}
                 workers_file.parent.mkdir(parents=True, exist_ok=True)
                 workers_file.write_text(json.dumps(registered, ensure_ascii=False, indent=2), encoding="utf-8")
 
+                sz_mb = pkg_dlg.final_size / (1024 * 1024)
+                sz_str = f"{sz_mb / 1024:.2f} ГБ" if sz_mb > 1024 else f"{sz_mb:.1f} МБ"
+
                 QMessageBox.information(
                     self,
                     "Воркер создан",
-                    f"Пакет для подключения воркера успешно сформирован:\n{save_path}\n\n"
+                    f"Автономный пакет вычислительного узла успешно сформирован:\n{save_path}\n\n"
                     f"Параметры узла:\n"
                     f"• Имя: {w_name}\n"
                     f"• ID: {w_id}\n"
-                    f"• Сервер: {m_url}\n\n"
-                    f"Для подключения достаточно распаковать архив на целевом ПК (16 ГБ ОЗУ) "
-                    f"и запустить run_worker.bat."
+                    f"• Сервер: {m_url}\n"
+                    f"• Размер архива: {sz_str}\n\n"
+                    f"Для подключения достаточно скопировать архив на целевой ПК, распаковать "
+                    f"и запустить run_worker.bat!"
                 )
                 self.update_cluster_ui()
             except Exception as e:
@@ -4190,100 +4668,27 @@ ID воркера     : {w_id}
         def update_viewer_with_dicom(self, folder_path: str):
             if not folder_path or not os.path.isdir(folder_path):
                 return
+            if getattr(self, "current_dicom_dir", None) == folder_path and getattr(self, "volume_3d_base", None) is not None:
+                return
+            if hasattr(self, '_viewer_loader_worker') and self._viewer_loader_worker and self._viewer_loader_worker.isRunning():
+                self._viewer_loader_worker.cancel()
+                self._viewer_loader_worker.wait(100)
+
+            self._viewer_loader_worker = ViewerLoadWorker(folder_path)
+            self._viewer_loader_worker.loaded.connect(self._on_viewer_dicom_loaded)
+            self._viewer_loader_worker.error.connect(lambda err: logger.warning(f"Ошибка фоновой загрузки DICOM: {err}"))
+            self._viewer_loader_worker.start()
+
+        def _on_viewer_dicom_loaded(self, folder_path, volume_3d, z_positions, spacing, img_pos):
             try:
-                import pydicom
-                import numpy as np
-                
-                dcm_files = [
-                    os.path.join(folder_path, f) for f in os.listdir(folder_path)
-                    if os.path.isfile(os.path.join(folder_path, f)) and not f.startswith('.')
-                ]
-                slices = []
-                for f in dcm_files:
-                    try:
-                        ds = pydicom.dcmread(f, stop_before_pixels=True)
-                        mod = str(getattr(ds, "Modality", "")).strip().upper()
-                        # Исключаем неграфические объекты RT
-                        if mod in ["RTSTRUCT", "RTDOSE", "RTPLAN", "REG", "PR"]:
-                            continue
-                        # Принимаем срезы КТ, МРТ или объекты с изображениями
-                        if hasattr(ds, "PixelData") or mod in ["CT", "MR", "PT"]:
-                            ds = pydicom.dcmread(f)
-                            slices.append(ds)
-                    except Exception:
-                        pass
-                
-                if not slices:
-                    logger.warning(f"В папке '{folder_path}' не найдено срезов DICOM для отображения.")
-                    return
-                    
-                # Безопасное определение Z-координаты среза
-                def get_slice_z(s):
-                    if hasattr(s, "ImagePositionPatient") and len(s.ImagePositionPatient) >= 3:
-                        try:
-                            return float(s.ImagePositionPatient[2])
-                        except Exception:
-                            pass
-                    if hasattr(s, "SliceLocation"):
-                        try:
-                            return float(s.SliceLocation)
-                        except Exception:
-                            pass
-                    if hasattr(s, "InstanceNumber"):
-                        try:
-                            return float(s.InstanceNumber)
-                        except Exception:
-                            pass
-                    return 0.0
-
-                slices.sort(key=get_slice_z)
-                
-                # Формирование 3D массива с учетом HU (RescaleSlope/Intercept)
-                volume = []
-                for s in slices:
-                    try:
-                        image = s.pixel_array.astype(np.float32)
-                        slope = getattr(s, 'RescaleSlope', 1)
-                        intercept = getattr(s, 'RescaleIntercept', 0)
-                        image = image * slope + intercept
-                        volume.append(image)
-                    except Exception as pe:
-                        logger.warning(f"Ошибка чтения pixel_array среза: {pe}")
-                        
-                if not volume:
-                    logger.warning("Не удалось извлечь пиксельные данные из срезов.")
-                    return
-
-                volume_3d = np.stack(volume)
-                
-                # Коррекция Window Level (Контраста) для КТ
-                mod = str(getattr(slices[0], "Modality", "CT")).strip().upper()
-                if mod == "CT":
-                    volume_3d = np.clip(volume_3d, -160, 240)
-                
-                # Транспонирование для правильной ориентации в pyqtgraph
-                volume_3d = np.transpose(volume_3d, (0, 2, 1))
-                
                 self.volume_3d_base = volume_3d
                 self.current_dicom_dir = folder_path
-                # Сохраняем Z-позиции срезов для корректного slice-by-slice маппинга контуров
-                self.z_positions = [get_slice_z(s) for s in slices]
-                self.dicom_pixel_spacing = (
-                    float(getattr(slices[0], 'PixelSpacing', [1, 1])[0]),
-                    float(getattr(slices[0], 'PixelSpacing', [1, 1])[1])
-                )
-                if hasattr(slices[0], "ImagePositionPatient") and len(slices[0].ImagePositionPatient) >= 2:
-                    self.dicom_image_position = [
-                        float(slices[0].ImagePositionPatient[0]),
-                        float(slices[0].ImagePositionPatient[1]),
-                    ]
-                else:
-                    self.dicom_image_position = [0.0, 0.0]
+                self.z_positions = z_positions
+                self.dicom_pixel_spacing = spacing
+                self.dicom_image_position = img_pos
 
                 self.dicom_viewer.setImage(self.volume_3d_base)
-                
-                # Устанавливаем центральный срез для наглядного отображения пациента
-                mid_idx = len(slices) // 2
+                mid_idx = len(z_positions) // 2
                 self.dicom_viewer.setCurrentIndex(mid_idx)
                 self.dicom_viewer.autoLevels()
                 if hasattr(self.dicom_viewer, "getView"):
@@ -4291,12 +4696,10 @@ ID воркера     : {w_id}
                         self.dicom_viewer.getView().autoRange()
                     except Exception:
                         pass
-                
-                # Принудительно вызываем обновление оверлея если галка включена
                 if hasattr(self, 'chk_show_structures') and self.chk_show_structures.isChecked():
                     self.on_show_structures_changed()
             except Exception as e:
-                logger.warning(f"Не удалось загрузить DICOM во вьюер: {e}")
+                logger.warning(f"Не удалось отобразить DICOM во вьюере: {e}")
 
         def _clear_imported_organs(self):
             """Удаляет все динамически импортированные сторонние органы из списка."""

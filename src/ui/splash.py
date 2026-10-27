@@ -119,13 +119,13 @@ def create_splash_screen(app, is_server: bool = False):
             app.processEvents()
 
         def finish(self, main_window):
-            """Отображает главное окно, ждет отрисовки и плавно закрывает сплэш-скрин."""
+            """Отображает главное окно и закрывает сплэш-скрин."""
             main_window.showMaximized()
             main_window.raise_()
             main_window.activateWindow()
             app.processEvents()
-            # Даем окну полностью завершить рендеринг виджетов перед скрытием заставки
-            QTimer.singleShot(450, self.close)
+            self.hide()
+            self.close()
 
     splash = ModernSplashScreen()
     splash.show()
