@@ -2353,6 +2353,7 @@ if PYQT_AVAILABLE:
             
             self.series_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             self.series_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+            self.series_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             self.series_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             self.series_table.customContextMenuRequested.connect(self.show_series_context_menu)
             self.series_table.cellDoubleClicked.connect(self.on_table_double_clicked)
@@ -3403,6 +3404,10 @@ if PYQT_AVAILABLE:
                 
                 # Меняем UI и обновляем вьюер ТОЛЬКО при ручном клике пользователя
                 if not getattr(self, "_is_updating_table", False):
+                    # Если эта папка уже отображается во вьюере, не тратим ресурсы на повторный парсинг диска
+                    if getattr(self, "current_dicom_dir", None) == selected_path and getattr(self, "volume_3d_base", None) is not None:
+                        return
+
                     self.update_progress_for_selected_patient(selected_path)
                     # Автоматический выбор пресета на основе области сканирования
                     area_item = self.series_table.item(row, 3)
@@ -3457,10 +3462,11 @@ if PYQT_AVAILABLE:
                         self.update_merge_combo_state()
 
         def on_table_double_clicked(self, row, col):
-            path = self.series_table.item(row, 6).text()
+            path = self.series_table.item(row, 6).text() if self.series_table.item(row, 6) else None
             if path and os.path.exists(path):
                 try:
-                    os.startfile(os.path.normpath(path))
+                    import threading
+                    threading.Thread(target=os.startfile, args=(os.path.normpath(path),), daemon=True).start()
                 except Exception as e:
                     logger.error(f"Не удалось открыть папку: {e}")
 
@@ -3475,11 +3481,19 @@ if PYQT_AVAILABLE:
             path = self.series_table.item(row, 6).text()
             
             menu = QMenu(self.series_table)
+            open_folder_action = menu.addAction("📂 Открыть папку в Проводнике")
             delete_action = menu.addAction("Удалить пациента")
             delete_structs_action = menu.addAction("Удалить файл структур")
             
             action = menu.exec(self.series_table.viewport().mapToGlobal(position))
-            if action == delete_action:
+            if action == open_folder_action:
+                if path and os.path.exists(path):
+                    try:
+                        import threading
+                        threading.Thread(target=os.startfile, args=(os.path.normpath(path),), daemon=True).start()
+                    except Exception as e:
+                        logger.error(f"Не удалось открыть папку: {e}")
+            elif action == delete_action:
                 self.scan_timer.stop()
                 reply = QMessageBox.question(
                     self,

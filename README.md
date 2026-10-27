@@ -98,6 +98,21 @@ python -m unittest discover -s tests -p "test_*.py"
 
 ---
 
+## 🧠 Используемые ИИ-модели и Благодарности (Acknowledgements & Citations)
+
+В качестве базового ядра сегментации анатомических структур используется нейросетевая модель с открытым исходным кодом **[TotalSegmentator](https://github.com/wasserth/TotalSegmentator)** (разработана Department of Research and Analysis, University Hospital Basel).
+
+Если вы используете результаты работы данной системы в научных исследованиях или публикациях, пожалуйста, цитируйте оригинальную статью авторов:
+
+> **Wasserthal, J., Breit, H. C., Meyer, M. T., Pradella, M., Hinck, D., Sauter, A. W., Heye, T., Boll, D., Cyriac, J., Yang, S., Bach, M., & Segeroth, M. (2023).**  
+> *TotalSegmentator: Robust Segmentation of 104 Anatomical Structures in CT Images.*  
+> **Radiology: Artificial Intelligence**, 5(5), e230024.  
+> DOI: [10.1148/ryai.230024](https://doi.org/10.1148/ryai.230024)
+
+Исходный код библиотеки TotalSegmentator распространяется под лицензией **Apache 2.0**. Веса базовых моделей доступны для открытого некоммерческого и исследовательского использования.
+
+---
+
 ## ⚠️ Медицинский Дисклеймер (Disclaimer)
 
 > [!WARNING]

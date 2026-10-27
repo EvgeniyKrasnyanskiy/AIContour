@@ -112,6 +112,23 @@ class TestUIAndElektaFilter(unittest.TestCase):
             if test_dir.exists():
                 shutil.rmtree(test_dir, ignore_errors=True)
 
+    def test_no_total_v1_and_valid_cli_tasks(self):
+        """Проверяет отсутствие total_v1 в поддерживаемых органах и задачах."""
+        from contour_engine import ContourEngine
+        import config
+        supported_organs = ContourEngine.get_all_supported_organs()
+        self.assertNotIn("total_v1", config.ROI_TO_TASK_MAP.values())
+        self.assertEqual(config.ROI_TO_TASK_MAP.get("pulmonary_artery"), "heartchambers_highres")
+
+    def test_readme_totalsegmentator_attribution(self):
+        """Проверяет наличие цитирования TotalSegmentator и авторов в README.md."""
+        readme_path = Path(__file__).resolve().parent.parent / "README.md"
+        self.assertTrue(readme_path.exists())
+        content = readme_path.read_text(encoding="utf-8")
+        self.assertIn("TotalSegmentator", content)
+        self.assertIn("Wasserthal", content)
+        self.assertIn("Radiology: Artificial Intelligence", content)
+
 if __name__ == '__main__':
     unittest.main()
 

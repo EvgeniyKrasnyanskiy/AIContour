@@ -991,7 +991,7 @@ class ContourEngine:
         try:
             from totalsegmentator.map_to_binary import class_map
             supported = set()
-            allowed_tasks = ['total', 'total_v1', 'brain_structures', 'head_glands_cavities', 'face']
+            allowed_tasks = ['total', 'brain_structures', 'head_glands_cavities', 'face', 'lung_vessels', 'heartchambers_highres']
             for task in allowed_tasks:
                 if task in class_map:
                     supported.update(class_map[task].values())
@@ -1171,8 +1171,6 @@ class ContourEngine:
                 from totalsegmentator.map_to_binary import class_map
                 if "total" in class_map:
                     total_supported = set(class_map["total"].values())
-                if "total_v1" in class_map:
-                    total_supported.update(class_map["total_v1"].values())
                 logger.info(f"Динамически загружено классов total TotalSegmentator: {len(total_supported)}")
             except Exception as e:
                 logger.warning(f"Не удалось динамически получить список классов TotalSegmentator: {e}. Резервный набор.")
@@ -1262,6 +1260,8 @@ class ContourEngine:
                                 # Ищем, в какой задаче в class_map он реально есть.
                                 found_task = None
                                 for t_name, t_classes in class_map.items():
+                                    if t_name == "total_v1":
+                                        continue
                                     if ai_part in t_classes.values():
                                         found_task = t_name
                                         break
@@ -1356,8 +1356,11 @@ class ContourEngine:
                     register_process_cb(process)
                     
                 current_loop_index = 0
-                last_percent = 0
+                max_parts = 3
                 total_tasks = len(tasks_to_run)
+                is_downloading = False
+                download_task_info = ""
+                last_reported_pct = -1
                     
                 import queue
                 from threading import Thread
@@ -1397,29 +1400,110 @@ class ContourEngine:
                     if line:
                         clean_line = line.strip()
                         if clean_line:
+                            # 1. Отслеживание скачивания весов нейросети
+                            if "Downloading model for Task" in clean_line or "Downloading model" in clean_line:
+                                is_downloading = True
+                                download_task_info = clean_line
+                                logger.info(f"[TotalSegmentator {task_name}]: {clean_line}")
+                                if step_callback is not None:
+                                    try:
+                                        step_callback(f"[TotalSegmentator {task_name}]: Загрузка весов ИИ-модели из сети ({clean_line})...")
+                                    except Exception:
+                                        pass
+                                if progress_callback:
+                                    progress_callback(5, f"Шаг 2/5: Загрузка весов ИИ-модели из сети ({clean_line})...")
+                                continue
+
+                            if "Download finished" in clean_line:
+                                is_downloading = False
+                                logger.info(f"[TotalSegmentator {task_name}]: {clean_line}")
+                                if step_callback is not None:
+                                    try:
+                                        step_callback(f"[TotalSegmentator {task_name}]: Распаковка загруженных весов...")
+                                    except Exception:
+                                        pass
+                                if progress_callback:
+                                    progress_callback(6, f"Шаг 2/5: Распаковка весов ИИ-модели...")
+                                continue
+
+                            # 2. Определение этапов инференса
+                            part_match = re.search(r'Predicting part (\d+) of (\d+)', clean_line)
+                            if part_match:
+                                is_downloading = False
+                                current_loop_index = int(part_match.group(1))
+                                max_parts = max(max_parts, int(part_match.group(2)))
+                                txt = f"Шаг 2/5: ИИ оконтуривает структуры (Задача {task_index}/{total_tasks}: {task_name}). Расчет части {current_loop_index} из {max_parts}..."
+                                logger.info(f"[TotalSegmentator {task_name}]: {clean_line}")
+                                if step_callback is not None:
+                                    try:
+                                        step_callback(txt)
+                                    except Exception:
+                                        pass
+                                if progress_callback:
+                                    calc_pct = 10 + int((((task_index - 1) * (max_parts + 1)) + current_loop_index) / (total_tasks * (max_parts + 1)) * 80)
+                                    progress_callback(min(90, calc_pct), txt)
+                                continue
+
+                            if "Generating rough segmentation" in clean_line:
+                                is_downloading = False
+                                current_loop_index = 0
+                                txt = f"Шаг 2/5: ИИ определяет границы тела (Задача {task_index}/{total_tasks}: {task_name})..."
+                                logger.info(f"[TotalSegmentator {task_name}]: {clean_line}")
+                                if step_callback is not None:
+                                    try:
+                                        step_callback(txt)
+                                    except Exception:
+                                        pass
+                                if progress_callback:
+                                    progress_callback(10, txt)
+                                continue
+
+                            if "Saving segmentations" in clean_line:
+                                is_downloading = False
+                                txt = f"Шаг 2/5: Сохранение сегментированных масок органов ({task_name})..."
+                                logger.info(f"[TotalSegmentator {task_name}]: {clean_line}")
+                                if step_callback is not None:
+                                    try:
+                                        step_callback(txt)
+                                    except Exception:
+                                        pass
+                                if progress_callback:
+                                    progress_callback(88, txt)
+                                continue
+
+                            # 3. Обработка tqdm-прогрессбара (для скачивания и инференса)
+                            match = re.search(r'(\d+)%\|', clean_line)
+                            if match:
+                                sub_percent = int(match.group(1))
+                                if is_downloading:
+                                    if progress_callback and sub_percent != last_reported_pct:
+                                        last_reported_pct = sub_percent
+                                        txt = f"Шаг 2/5: Загрузка весов ИИ-модели из сети ({download_task_info}) {sub_percent}%..."
+                                        progress_callback(5, txt)
+                                else:
+                                    total_units = (max_parts + 1) * total_tasks
+                                    current_unit = (task_index - 1) * (max_parts + 1) + current_loop_index
+                                    global_ai_percent = 10 + int((current_unit * 100 + sub_percent) / (total_units * 100) * 80)
+                                    global_ai_percent = min(90, max(5, global_ai_percent))
+
+                                    if current_loop_index == 0:
+                                        txt = f"Шаг 2/5: ИИ определяет границы тела (Задача {task_index}/{total_tasks}: {task_name}) {sub_percent}%..."
+                                    else:
+                                        txt = f"Шаг 2/5: ИИ оконтуривает структуры (Задача {task_index}/{total_tasks}: {task_name}). Расчет части {current_loop_index} из {max_parts} ({sub_percent}%)..."
+                                    
+                                    if progress_callback and sub_percent != last_reported_pct:
+                                        last_reported_pct = sub_percent
+                                        progress_callback(global_ai_percent, txt)
+                                # Пропускаем спам tqdm из общего логирования
+                                continue
+
+                            # 4. Все остальные строки логируем и передаем в step_callback
                             logger.info(f"[TotalSegmentator {task_name}]: {clean_line}")
                             if step_callback is not None:
                                 try:
                                     step_callback(f"[TotalSegmentator {task_name}]: {clean_line}")
                                 except Exception as cb_err:
                                     logger.error(f"Ошибка вызова step_callback: {cb_err}")
-                            else:
-                                logger.warning(f"step_callback является None во время логирования TotalSegmentator {task_name}")
-                            
-                            if progress_callback:
-                                match = re.search(r'(\d+)%\|', clean_line)
-                                if match:
-                                    sub_percent = int(match.group(1))
-                                    if sub_percent == 0 and last_percent == 100:
-                                        current_loop_index += 1
-                                    last_percent = sub_percent
-                                    
-                                    global_ai_percent = 5 + int((((task_index - 1) * 500) + (current_loop_index * 100) + sub_percent) / (total_tasks * 500) * 90)
-                                    if current_loop_index == 0:
-                                        txt = f"Шаг 2/5: ИИ определяет границы тела (Задача {task_index}/{total_tasks}: {task_name})..."
-                                    else:
-                                        txt = f"Шаг 2/5: ИИ оконтуривает структуры (Задача {task_index}/{total_tasks}: {task_name}). Расчет части {current_loop_index} из 4..."
-                                    progress_callback(global_ai_percent, txt)
                             
                 return_code = process.wait()
                 if return_code != 0:

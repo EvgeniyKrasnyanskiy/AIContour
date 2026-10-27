@@ -54,6 +54,7 @@ ROI_TO_TASK_MAP = {
     'auditory_canal_left': 'head_glands_cavities',
     'auditory_canal_right': 'head_glands_cavities',
     'inferior_vena_cava': 'total',
+    'pulmonary_artery': 'heartchambers_highres',
 }
 
 # Маппинг файлов масок ИИ на стандартные ID OAR
