@@ -18,10 +18,14 @@ from pydantic import BaseModel
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 
-# Импортируем менеджер очереди
+# Импортируем менеджер очереди и версионирование
 from server.queue_manager import QueueManager
+from server.update_manager import UpdateManager
+from version import get_version
 
 logger = logging.getLogger("ServerAPI")
+update_manager = UpdateManager()
+
 
 import time
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -365,7 +369,12 @@ def get_server_status():
     except Exception as e:
         logger.error(f"Ошибка проверки изменения конфигурации бэкенда: {e}")
         
+    meta = update_manager.get_update_info()
     return {
+        "version": get_version(),
+        "server_version": get_version(),
+        "latest_client_version": meta.get("latest_version", get_version()),
+        "has_client_update": meta.get("has_update", False),
         "is_paused": queue_manager.is_paused,
         "pending_count": len(queue_manager.pending_queue),
         "jobs": queue_manager.get_queue_info(),
@@ -530,3 +539,70 @@ def save_server_license(payload: LicensePayload):
     engine.save_presets_config()
     logger.info("Лицензионный ключ успешно обновлен на сервере.")
     return {"status": "success", "message": "Лицензионный ключ обновлен на сервере."}
+
+
+# ================================================================================
+# Эндпоинты репозитория обновлений клиента (Auto-Update Hub)
+# ================================================================================
+
+@app.get("/api/updates/client/info")
+def get_client_update_info(client_version: Optional[str] = None):
+    """
+    Возвращает информацию об актуальной версии клиента и наличии обновлений.
+    """
+    return update_manager.get_update_info(client_version=client_version)
+
+
+@app.get("/api/updates/client/download")
+def download_client_binary():
+    """
+    Скачивание актуального исполняемого файла клиента ASS_Client.exe.
+    """
+    binary_path = update_manager.get_client_binary_path()
+    if not binary_path or not binary_path.exists():
+        raise HTTPException(
+            status_code=404, 
+            detail="Дистрибутив клиента ASS_Client.exe не найден в репозитории сервера."
+        )
+    return FileResponse(
+        path=str(binary_path),
+        media_type="application/octet-stream",
+        filename=binary_path.name
+    )
+
+
+@app.post("/api/updates/client/upload")
+async def upload_client_binary(
+    file: UploadFile = File(...),
+    version: str = Form(...),
+    is_critical: bool = Form(False),
+    changelog: str = Form("")
+):
+    """
+    Загрузка нового дистрибутива клиента администратором для локальной раздачи в клинике.
+    """
+    try:
+        temp_dir = Path(tempfile.gettempdir())
+        temp_file = temp_dir / f"upload_{file.filename}"
+        with open(temp_file, "wb") as f_out:
+            content = await file.read()
+            f_out.write(content)
+        
+        meta = update_manager.register_client_binary(
+            source_path=temp_file,
+            version_str=version,
+            is_critical=is_critical,
+            changelog=changelog
+        )
+        if temp_file.exists():
+            temp_file.unlink()
+            
+        return {
+            "status": "success", 
+            "message": f"Клиент v{meta['version']} успешно загружен и готов к раздаче.", 
+            "meta": meta
+        }
+    except Exception as e:
+        logger.error(f"Ошибка сохранения обновления клиента: {e}")
+        raise HTTPException(status_code=500, detail=f"Не удалось сохранить обновление: {e}")
+

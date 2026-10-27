@@ -1585,7 +1585,8 @@ if PYQT_AVAILABLE:
         def __init__(self, splash=None):
             super().__init__()
             self.splash = splash
-            self.setWindowTitle("Auto Segmentation System [Сервер]")
+            from version import get_version
+            self.setWindowTitle(f"Auto Segmentation System [Сервер v{get_version()}]")
             self.setMinimumSize(960, 760)
             if not self.splash:
                 self.showMaximized()
@@ -2144,6 +2145,31 @@ if PYQT_AVAILABLE:
                 
             self.btn_connected_clients.clicked.connect(show_connected_clients)
             admin_settings_layout.addWidget(self.btn_connected_clients)
+            
+            # Управление обновлениями клиентов (Auto-Update Hub)
+            update_admin_group = QGroupBox("📦 Раздача обновлений клиентам (Auto-Update Hub)")
+            update_admin_layout = QVBoxLayout(update_admin_group)
+            update_admin_layout.setSpacing(8)
+
+            from server.update_manager import UpdateManager
+            self.server_update_mgr = UpdateManager()
+            update_meta = self.server_update_mgr.get_update_info()
+
+            self.lbl_admin_update_info = QLabel(
+                f"Раздаваемая версия клиента: <b>v{update_meta.get('latest_version', get_version())}</b><br>"
+                f"Файл: <code>{update_meta.get('file_name', 'ASS_Client.exe')}</code> "
+                f"({update_meta.get('file_size', 0) / (1024*1024):.1f} МБ)"
+            )
+            self.lbl_admin_update_info.setStyleSheet("color: #dcdde1; line-height: 1.4;")
+            update_admin_layout.addWidget(self.lbl_admin_update_info)
+
+            self.btn_upload_client_exe = QPushButton("📤 Загрузить новый ASS_Client.exe на сервер...")
+            self.btn_upload_client_exe.setObjectName("btnAction")
+            self.btn_upload_client_exe.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_upload_client_exe.clicked.connect(self.upload_new_client_binary_dialog)
+            update_admin_layout.addWidget(self.btn_upload_client_exe)
+
+            admin_settings_layout.addWidget(update_admin_group)
             
             # По умолчанию скрываем весь виджет настроек администратора
             self.admin_settings_widget.setVisible(False)
@@ -3082,6 +3108,53 @@ if PYQT_AVAILABLE:
                 self.lbl_conn_status.setText("Статус: нет связи 🔴")
                 self.lbl_conn_status.setStyleSheet("color: #e74c3c; font-weight: bold;")
                 QMessageBox.critical(self, "Сбой подключения", f"Не удалось связаться с сервером:\n{e}")
+
+        def upload_new_client_binary_dialog(self):
+            """Диалог выбора и регистрации нового файла ASS_Client.exe администратором."""
+            from pathlib import Path
+            from PyQt6.QtWidgets import QFileDialog, QInputDialog, QLineEdit, QMessageBox
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, 
+                "Выберите новый исполняемый файл ASS_Client.exe",
+                "", 
+                "Исполняемые файлы (*.exe);;Все файлы (*)"
+            )
+            if not file_path:
+                return
+
+            chosen_path = Path(file_path)
+            from version import get_version
+            default_v = get_version()
+            new_v, ok = QInputDialog.getText(
+                self, 
+                "Версия клиента", 
+                "Укажите номер версии для загружаемого файла (например, 2.0.32):",
+                QLineEdit.EchoMode.Normal,
+                default_v
+            )
+            if not ok or not new_v.strip():
+                return
+
+            try:
+                meta = self.server_update_mgr.register_client_binary(
+                    source_path=chosen_path,
+                    version_str=new_v.strip(),
+                    is_critical=False,
+                    changelog="Загружено администратором через интерфейс сервера."
+                )
+                self.lbl_admin_update_info.setText(
+                    f"Раздаваемая версия клиента: <b>v{meta['version']}</b><br>"
+                    f"Файл: <code>{meta['file_name']}</code> "
+                    f"({meta['file_size'] / (1024*1024):.1f} МБ)"
+                )
+                QMessageBox.information(
+                    self, 
+                    "Успех", 
+                    f"Новый дистрибутив клиента v{meta['version']} успешно зарегистрирован!\n\n"
+                    f"Все подключенные клиенты в клинике автоматически получат уведомление и смогут обновиться."
+                )
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось зарегистрировать файл обновления:\n{e}")
 
         def browse_temp_dir(self):
             """Диалог выбора временной папки для КТ (например, RAM-диска R:\\)."""

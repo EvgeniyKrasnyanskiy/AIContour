@@ -60,3 +60,6 @@ ASS_ToDo.txt
 # PyInstaller spec files
 *.spec
 
+# Локальные дистрибутивы обновлений
+updates/
+

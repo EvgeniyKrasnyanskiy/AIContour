@@ -208,38 +208,90 @@ try:
     PYQT_AVAILABLE = True
     from src.ui.styles import StyleManager
     from src.network.api_client import NetworkStatusWorker
-    
+    from src.updater.client_updater import ClientUpdater
+    from version import get_version, is_newer_version
+
     class UpdateCheckerThread(QThread):
-        """Поток для асинхронной фоновой проверки обновлений на GitHub."""
-        finished_signal = pyqtSignal(bool, str, str, str)
+        """Поток для асинхронной проверки обновлений (сначала с локального сервера ASS, затем с GitHub)."""
+        # (success, latest_version, download_or_release_url, error_msg, is_from_server, is_critical, changelog)
+        finished_signal = pyqtSignal(bool, str, str, str, bool, bool, str)
         
-        def __init__(self, current_version: str):
+        def __init__(self, current_version: str, server_url: str = ""):
             super().__init__()
             self.current_version = current_version
+            self.server_url = server_url
             
         def run(self):
             import requests
+            # 1. Проверяем локальный сервер ASS (Auto-Update Hub в клинике)
+            if self.server_url:
+                try:
+                    clean_server = self.server_url.rstrip("/")
+                    res = requests.get(
+                        f"{clean_server}/api/updates/client/info",
+                        params={"client_version": self.current_version},
+                        timeout=3
+                    )
+                    if res.status_code == 200:
+                        data = res.json()
+                        latest_v = data.get("latest_version", "")
+                        has_up = data.get("has_update", False)
+                        changelog = data.get("changelog", "")
+                        is_crit = data.get("is_critical", False)
+                        if has_up and latest_v:
+                            dl_url = f"{clean_server}/api/updates/client/download"
+                            self.finished_signal.emit(True, latest_v, dl_url, "", True, is_crit, changelog)
+                            return
+                except Exception:
+                    pass
+
+            # 2. Если на локальном сервере обновления нет или он недоступен, проверяем GitHub Releases
             try:
-                # Используем публичный URL с редиректом, чтобы избежать лимитов GitHub API (Rate Limiting)
                 url = "https://github.com/EvgeniyKrasnyanskiy/ASS/releases/latest"
                 headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
                 response = requests.get(url, headers=headers, timeout=5, allow_redirects=True)
-                
                 if response.status_code == 200:
                     final_url = response.url
                     if "/releases/tag/" in final_url:
                         tag_name = final_url.split("/releases/tag/")[-1].strip()
                         latest_version = tag_name.lstrip('v')
-                        self.finished_signal.emit(True, latest_version, final_url, "")
+                        self.finished_signal.emit(True, latest_version, final_url, "", False, False, "")
+                        return
                     else:
-                        self.finished_signal.emit(False, "", "", "Не удалось определить версию из ответа GitHub")
+                        self.finished_signal.emit(False, "", "", "Не удалось определить версию из ответа GitHub", False, False, "")
+                        return
                 else:
-                    self.finished_signal.emit(False, "", "", f"Ошибка сервера GitHub: {response.status_code}")
-            except requests.exceptions.RequestException:
-                # Безопасно обрабатываем отсутствие интернета
-                self.finished_signal.emit(False, "", "", "Нет подключения к интернету или сервер недоступен")
+                    self.finished_signal.emit(False, "", "", f"Ошибка сервера: {response.status_code}", False, False, "")
             except Exception as e:
-                self.finished_signal.emit(False, "", "", f"Ошибка: {str(e)}")
+                self.finished_signal.emit(False, "", "", f"Ошибка: {str(e)}", False, False, "")
+
+    class DownloadUpdateWorker(QThread):
+        """Поток для фонового скачивания файла обновления клиента."""
+        progress_signal = pyqtSignal(int, int)   # downloaded_bytes, total_bytes
+        finished_signal = pyqtSignal(bool, str)  # success, message_or_path
+
+        def __init__(self, updater: ClientUpdater, server_url: str):
+            super().__init__()
+            self.updater = updater
+            self.server_url = server_url
+            self.is_cancelled = False
+
+        def cancel(self):
+            self.is_cancelled = True
+
+        def run(self):
+            try:
+                res_path = self.updater.download_update(
+                    server_url=self.server_url,
+                    progress_callback=lambda d, t: self.progress_signal.emit(d, t),
+                    cancel_check=lambda: self.is_cancelled
+                )
+                if res_path and res_path.exists():
+                    self.finished_signal.emit(True, str(res_path))
+                else:
+                    self.finished_signal.emit(False, "Не удалось сохранить файл обновления.")
+            except Exception as e:
+                self.finished_signal.emit(False, str(e))
 
     class OrganIndentDelegate(QStyledItemDelegate):
         """Делегат для смещения не-header элементов (чекбокс + иконка + текст) списка органов вправо."""
@@ -1612,6 +1664,15 @@ if PYQT_AVAILABLE:
             self._current_active_job_id = None
             self.failed_status_checks = 0
             
+            # Инициализация модуля автообновлений
+            self.updater = ClientUpdater(get_version())
+            self.staged_update_version = None
+            self.available_update_version = None
+            self.available_update_url = None
+            self.available_update_is_server = False
+            self.available_update_is_critical = False
+            self.is_bg_downloading = False
+
             # Таймер для периодического обновления очереди задач и логов сетевой обработки
             self.server_ui_timer = QTimer(self)
             self.server_ui_timer.setInterval(1000)
@@ -1673,13 +1734,31 @@ if PYQT_AVAILABLE:
             self.tab_widget = QTabWidget()
             self.tab_widget.currentChanged.connect(self.on_tab_changed)
             
-            # Индикатор состояния сервера в правом верхнем углу вкладок (кликабелен для быстрой смены IP)
+            # Индикатор состояния сервера и кнопка автообновления в правом верхнем углу вкладок
+            corner_container = QWidget()
+            corner_layout = QHBoxLayout(corner_container)
+            corner_layout.setContentsMargins(0, 0, 5, 0)
+            corner_layout.setSpacing(8)
+
+            self.btn_corner_update = QPushButton("🔄 Обновить")
+            self.btn_corner_update.setStyleSheet(
+                "QPushButton { background-color: #27ae60; color: white; font-weight: bold; "
+                "font-size: 11px; padding: 2px 8px; border-radius: 4px; border: none; } "
+                "QPushButton:hover { background-color: #2ecc71; }"
+            )
+            self.btn_corner_update.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_corner_update.setVisible(False)
+            self.btn_corner_update.clicked.connect(self.on_corner_update_clicked)
+            corner_layout.addWidget(self.btn_corner_update)
+
             self.lbl_server_status_indicator = QLabel("Сервер: Недоступен 🔴")
-            self.lbl_server_status_indicator.setStyleSheet("font-weight: bold; color: #ff6b6b; margin-right: 10px; margin-bottom: 7px; font-size: 12px; padding: 2px 6px; border-radius: 4px;")
+            self.lbl_server_status_indicator.setStyleSheet("font-weight: bold; color: #ff6b6b; margin-right: 5px; margin-bottom: 2px; font-size: 12px; padding: 2px 6px; border-radius: 4px;")
             self.lbl_server_status_indicator.setCursor(Qt.CursorShape.PointingHandCursor)
             self.lbl_server_status_indicator.setToolTip("Кликните для быстрой настройки IP-адреса сервера ASS 🌐")
             self.lbl_server_status_indicator.mousePressEvent = self.on_status_indicator_clicked
-            self.tab_widget.setCornerWidget(self.lbl_server_status_indicator, Qt.Corner.TopRightCorner)
+            corner_layout.addWidget(self.lbl_server_status_indicator)
+
+            self.tab_widget.setCornerWidget(corner_container, Qt.Corner.TopRightCorner)
             
             left_layout.addWidget(self.tab_widget)
 
@@ -2070,6 +2149,17 @@ if PYQT_AVAILABLE:
             self.btn_check_update.clicked.connect(self.check_for_updates_clicked)
             update_layout.addWidget(self.btn_check_update)
             
+            self.btn_download_update = QPushButton("📥 Скачать и установить обновление")
+            self.btn_download_update.setObjectName("btnAction")
+            self.btn_download_update.setVisible(False)
+            self.btn_download_update.clicked.connect(self.on_download_update_clicked)
+            update_layout.addWidget(self.btn_download_update)
+
+            self.update_progress_bar = QProgressBar()
+            self.update_progress_bar.setVisible(False)
+            self.update_progress_bar.setStyleSheet("QProgressBar { height: 16px; text-align: center; }")
+            update_layout.addWidget(self.update_progress_bar)
+
             self.lbl_update_status = QLabel("")
             self.lbl_update_status.setWordWrap(True)
             self.lbl_update_status.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
@@ -2615,27 +2705,22 @@ if PYQT_AVAILABLE:
             from pathlib import Path
             if getattr(sys, 'frozen', False):
                 base_dir = Path(sys._MEIPASS)
-            else:
-                base_dir = Path(__file__).parent.resolve()
-            
-            version_file = base_dir / "version.txt"
-            if version_file.exists():
-                try:
-                    return version_file.read_text(encoding="utf-8").strip()
-                except Exception:
-                    pass
-            return "2.0.0"
+        def get_client_version(self):
+            return get_version()
             
         def check_for_updates_clicked(self):
             self.btn_check_update.setEnabled(False)
-            self.lbl_update_status.setText("Проверка обновлений...")
+            self.btn_download_update.setVisible(False)
+            self.update_progress_bar.setVisible(False)
+            self.lbl_update_status.setText("Проверка обновлений на сервере ASS и GitHub...")
             self.lbl_update_status.setStyleSheet("color: #7f8c8d; font-style: italic;")
             
-            self.update_thread = UpdateCheckerThread(self.get_client_version())
+            server_url = self.get_server_url()
+            self.update_thread = UpdateCheckerThread(self.get_client_version(), server_url=server_url)
             self.update_thread.finished_signal.connect(self.on_update_check_finished)
             self.update_thread.start()
             
-        def on_update_check_finished(self, success: bool, latest_version: str, release_url: str, error_msg: str):
+        def on_update_check_finished(self, success: bool, latest_version: str, release_url: str, error_msg: str, is_from_server: bool, is_critical: bool, changelog: str):
             self.btn_check_update.setEnabled(True)
             if not success:
                 self.lbl_update_status.setText(f"Проверка не удалась: {error_msg}")
@@ -2643,25 +2728,165 @@ if PYQT_AVAILABLE:
                 return
                 
             current = self.get_client_version()
-            
-            try:
-                curr_parts = [int(x) for x in current.split(".")]
-                late_parts = [int(x) for x in latest_version.split(".")]
-                while len(curr_parts) < 3: curr_parts.append(0)
-                while len(late_parts) < 3: late_parts.append(0)
-                has_new = late_parts > curr_parts
-            except Exception:
-                has_new = latest_version != current
+            has_new = is_newer_version(current=current, target=latest_version)
                 
             if has_new:
-                self.lbl_update_status.setText(
-                    f"Доступна новая версия: <b style='color: #2ecc71;'>v{latest_version}</b> (установлена v{current}).<br>"
-                    f"<a href='{release_url}' style='color: #3498db; text-decoration: underline;'>Скачать обновление на GitHub</a>"
+                self.available_update_version = latest_version
+                self.available_update_url = release_url
+                self.available_update_is_server = is_from_server
+                self.available_update_is_critical = is_critical
+                
+                source_desc = "на сервере клиники" if is_from_server else "на GitHub"
+                critical_badge = " <b style='color: #e74c3c;'>[ОБЯЗАТЕЛЬНОЕ]</b>" if is_critical else ""
+                
+                status_html = (
+                    f"Доступна новая версия: <b style='color: #2ecc71;'>v{latest_version}</b>{critical_badge} "
+                    f"({source_desc}, текущая v{current})."
                 )
+                if changelog:
+                    status_html += f"<br><i>Изменения: {changelog}</i>"
+                    
+                if not is_from_server:
+                    status_html += f"<br><a href='{release_url}' style='color: #3498db; text-decoration: underline;'>Перейти к релизу на GitHub</a>"
+                    
+                self.lbl_update_status.setText(status_html)
                 self.lbl_update_status.setStyleSheet("")
+
+                # Если обновление на сервере — активируем кнопку прямой загрузки
+                if is_from_server:
+                    # Проверяем, может файл уже скачан
+                    if getattr(self, "staged_update_version", None) == latest_version and self.updater.staged_file.exists():
+                        self.btn_download_update.setText(f"🔄 Перезапустить приложение (v{latest_version})")
+                        self.btn_download_update.setStyleSheet("background-color: #27ae60; font-weight: bold; color: white;")
+                    else:
+                        self.btn_download_update.setText(f"📥 Скачать и установить v{latest_version}")
+                        self.btn_download_update.setStyleSheet("")
+                    self.btn_download_update.setVisible(True)
+                    self.btn_download_update.setEnabled(True)
+
+                    self.btn_corner_update.setText(f"🔄 v{latest_version}")
+                    self.btn_corner_update.setVisible(True)
+                else:
+                    self.btn_download_update.setVisible(False)
             else:
                 self.lbl_update_status.setText("У вас установлена последняя версия приложения.")
                 self.lbl_update_status.setStyleSheet("color: #2ecc71;")
+                self.btn_download_update.setVisible(False)
+
+        def on_download_update_clicked(self):
+            """Обработка клика по кнопке скачивания/установки обновления."""
+            latest_v = getattr(self, "available_update_version", None)
+            if getattr(self, "staged_update_version", None) == latest_v and self.updater.staged_file.exists():
+                self.apply_update_flow()
+                return
+
+            server_url = self.get_server_url()
+            if not server_url:
+                QMessageBox.warning(self, "Ошибка", "Не указан адрес сервера ASS.")
+                return
+
+            self.btn_download_update.setEnabled(False)
+            self.btn_download_update.setText("⏳ Загрузка обновления...")
+            self.update_progress_bar.setValue(0)
+            self.update_progress_bar.setVisible(True)
+
+            self.download_worker = DownloadUpdateWorker(self.updater, server_url)
+            self.download_worker.progress_signal.connect(self.on_download_progress)
+            self.download_worker.finished_signal.connect(self.on_download_finished)
+            self.download_worker.start()
+
+        def on_download_progress(self, downloaded: int, total: int):
+            if total > 0:
+                pct = int((downloaded / total) * 100)
+                self.update_progress_bar.setValue(pct)
+                mb_dl = downloaded / (1024 * 1024)
+                mb_tot = total / (1024 * 1024)
+                self.lbl_update_status.setText(f"Загрузка обновления: {mb_dl:.1f} МБ из {mb_tot:.1f} МБ ({pct}%)")
+
+        def on_download_finished(self, success: bool, msg: str):
+            self.update_progress_bar.setVisible(False)
+            self.btn_download_update.setEnabled(True)
+            if success:
+                latest_v = getattr(self, "available_update_version", get_version())
+                self.staged_update_version = latest_v
+                self.btn_download_update.setText(f"🔄 Перезапустить приложение сейчас (v{latest_v})")
+                self.btn_download_update.setStyleSheet("background-color: #27ae60; font-weight: bold; color: white;")
+                self.lbl_update_status.setText(f"<b style='color: #2ecc71;'>Обновление v{latest_v} готово к установке!</b>")
+                self.btn_corner_update.setText(f"🔄 Перезапустить (v{latest_v})")
+                self.btn_corner_update.setVisible(True)
+
+                if getattr(self, "available_update_is_critical", False):
+                    self.apply_update_flow(is_critical=True)
+            else:
+                self.btn_download_update.setText("📥 Скачать и установить обновление")
+                self.lbl_update_status.setText(f"<span style='color: #e74c3c;'>Ошибка скачивания: {msg}</span>")
+                QMessageBox.critical(self, "Ошибка обновления", f"Не удалось загрузить обновление с сервера:\n{msg}")
+
+        def on_corner_update_clicked(self):
+            """Клик по кнопке обновления в правом верхнем углу."""
+            if getattr(self, "staged_update_version", None) and self.updater.staged_file.exists():
+                self.apply_update_flow()
+            else:
+                self.tab_widget.setCurrentIndex(1)
+                self.on_download_update_clicked()
+
+        def apply_update_flow(self, is_critical: bool = False):
+            """Запрос подтверждения и перезапуск приложения для применения обновления."""
+            latest_v = getattr(self, "staged_update_version", getattr(self, "available_update_version", "новой версии"))
+            if not is_critical:
+                res = QMessageBox.question(
+                    self,
+                    "Обновление приложения ASS",
+                    f"Обновление до v{latest_v} готово к установке.\n\n"
+                    f"Приложение будет перезапущено через пару секунд. Все настройки сохранятся.\n\n"
+                    f"Перезапустить сейчас?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                if res != QMessageBox.StandardButton.Yes:
+                    return
+
+            self.save_settings()
+            success = self.updater.apply_update_and_restart()
+            if success:
+                from PyQt6.QtWidgets import QApplication
+                QApplication.quit()
+            else:
+                QMessageBox.warning(
+                    self, 
+                    "Внимание", 
+                    "Приложение запущено из исходного кода Python или не удалось запустить сценарий обновления.\n"
+                    "Обновленный файл сохранен во временной папке."
+                )
+
+        def start_background_update_download(self, latest_v: str):
+            """Запуск тихого фонового скачивания обновления с сервера в период простоя станции."""
+            if getattr(self, "is_bg_downloading", False):
+                return
+            if getattr(self, "staged_update_version", None) == latest_v and self.updater.staged_file.exists():
+                self.btn_corner_update.setText(f"🔄 Перезапустить (v{latest_v})")
+                self.btn_corner_update.setVisible(True)
+                return
+
+            server_url = self.get_server_url()
+            if not server_url:
+                return
+
+            self.is_bg_downloading = True
+            self.available_update_version = latest_v
+            logger.info(f"Станция свободна: запуск фонового скачивания обновления v{latest_v} с сервера...")
+            
+            def bg_done(success: bool, msg: str):
+                self.is_bg_downloading = False
+                if success:
+                    self.staged_update_version = latest_v
+                    self.btn_corner_update.setText(f"🔄 Перезапустить (v{latest_v})")
+                    self.btn_corner_update.setVisible(True)
+                    logger.info(f"Фоновое скачивание обновления v{latest_v} завершено успешно.")
+
+            self.bg_worker = DownloadUpdateWorker(self.updater, server_url)
+            self.bg_worker.finished_signal.connect(bg_done)
+            self.bg_worker.start()
 
         def check_auto_update_time(self):
             from PyQt6.QtCore import QDate, QTime
@@ -2675,31 +2900,30 @@ if PYQT_AVAILABLE:
                     self.settings.setValue("last_auto_update_date", current_date)
                     
                     # Запуск тихой фоновой проверки
-                    self.auto_update_thread = UpdateCheckerThread(self.get_client_version())
+                    server_url = self.get_server_url()
+                    self.auto_update_thread = UpdateCheckerThread(self.get_client_version(), server_url=server_url)
                     self.auto_update_thread.finished_signal.connect(self.on_auto_update_check_finished)
                     self.auto_update_thread.start()
                     
-        def on_auto_update_check_finished(self, success: bool, latest_version: str, release_url: str, error_msg: str):
+        def on_auto_update_check_finished(self, success: bool, latest_version: str, release_url: str, error_msg: str, is_from_server: bool, is_critical: bool, changelog: str):
             if not success:
-                return  # Тихо игнорируем сетевые сбои
+                return
                 
             current = self.get_client_version()
-            try:
-                curr_parts = [int(x) for x in current.split(".")]
-                late_parts = [int(x) for x in latest_version.split(".")]
-                while len(curr_parts) < 3: curr_parts.append(0)
-                while len(late_parts) < 3: late_parts.append(0)
-                has_new = late_parts > curr_parts
-            except Exception:
-                has_new = latest_version != current
+            has_new = is_newer_version(current=current, target=latest_version)
                 
             if has_new:
-                # Обновляем статус в UI настроек, чтобы пользователь увидел информацию при переходе туда
-                self.lbl_update_status.setText(
-                    f"Доступна новая версия: <b style='color: #2ecc71;'>v{latest_version}</b> (установлена v{current}).<br>"
-                    f"<a href='{release_url}' style='color: #3498db; text-decoration: underline;'>Скачать обновление на GitHub</a>"
-                )
-                self.lbl_update_status.setStyleSheet("")
+                self.available_update_version = latest_version
+                self.available_update_url = release_url
+                self.available_update_is_server = is_from_server
+                self.available_update_is_critical = is_critical
+                
+                # Если станция свободна — сразу начинаем фоновое скачивание
+                if is_from_server and not getattr(self, "_current_active_job_id", None):
+                    self.start_background_update_download(latest_version)
+                else:
+                    self.btn_corner_update.setText(f"🔄 v{latest_version}")
+                    self.btn_corner_update.setVisible(True)
 
         def init_presets_and_organs(self):
             """Инициализирует комбобокс пресетов и список органов из конфигурации config/."""
@@ -5809,10 +6033,20 @@ if PYQT_AVAILABLE:
                 # Обновление постоянного индикатора состояния сервера
                 if is_paused:
                     self.lbl_server_status_indicator.setText("Сервер: ⏸️")
-                    self.lbl_server_status_indicator.setStyleSheet("font-weight: bold; color: #f39c12; margin-right: 10px; margin-bottom: 7px; font-size: 12px;")
+                    self.lbl_server_status_indicator.setStyleSheet("font-weight: bold; color: #f39c12; margin-right: 5px; margin-bottom: 2px; font-size: 12px;")
                 else:
                     self.lbl_server_status_indicator.setText("Сервер: ✅")
-                    self.lbl_server_status_indicator.setStyleSheet("font-weight: bold; color: #2ecc71; margin-right: 10px; margin-bottom: 7px; font-size: 12px;")
+                    self.lbl_server_status_indicator.setStyleSheet("font-weight: bold; color: #2ecc71; margin-right: 5px; margin-bottom: 2px; font-size: 12px;")
+
+                # Проверка наличия обновлений клиента с сервера
+                latest_client_ver = data.get("latest_client_version", "")
+                has_client_update = data.get("has_client_update", False)
+                if has_client_update and latest_client_ver:
+                    if getattr(self, "staged_update_version", None) == latest_client_ver and self.updater.staged_file.exists():
+                        self.btn_corner_update.setText(f"🔄 Перезапустить (v{latest_client_ver})")
+                        self.btn_corner_update.setVisible(True)
+                    elif not getattr(self, "is_bg_downloading", False) and not getattr(self, "_current_active_job_id", None):
+                        self.start_background_update_download(latest_client_ver)
                 
                 # Обновление таблицы очереди (все задачи очереди сервера)
                 my_client_name = self.client_name_edit.text().strip()
