@@ -5,7 +5,7 @@
 ================================================================================
 Скрипт автооконтурирования органов риска (OAR) на КТ: Графический интерфейс PyQt6
 ================================================================================
-Этот файл содержит графическую оболочку приложения AI Contour на PyQt6.
+Этот файл содержит графическую оболочку приложения ASS (Auto Segmentation System) на PyQt6.
 Вся тяжелая вычислительная логика вынесена в модуль contour_engine.py.
 
 Особенности:
@@ -118,7 +118,7 @@ except ImportError as e:
     diag_file = Path("auto_contour_diagnostic.txt")
     try:
         with open(diag_file, "w", encoding="utf-8") as f:
-            f.write("=== ДИАГНОСТИЧЕСКИЙ ОТЧЕТ AI CONTOUR ===\n")
+            f.write("=== ДИАГНОСТИЧЕСКИЙ ОТЧЕТ ASS ===\n")
             f.write(f"Время запуска: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"Python: {sys.version}\n")
             f.write(f"Платформа: {sys.platform}\n")
@@ -180,7 +180,7 @@ except ImportError as e:
         
     try:
         msg = f"Произошла ошибка загрузки библиотек.\nДиагностический отчет записан в файл:\n{diag_file.resolve()}\n\nПожалуйста, отправьте этот файл разработчику."
-        ctypes.windll.user32.MessageBoxW(0, msg, "AI Contour - Ошибка запуска", 0x10)
+        ctypes.windll.user32.MessageBoxW(0, msg, "ASS - Ошибка запуска", 0x10)
     except Exception:
         pass
     raise e
@@ -221,7 +221,7 @@ try:
             import requests
             try:
                 # Используем публичный URL с редиректом, чтобы избежать лимитов GitHub API (Rate Limiting)
-                url = "https://github.com/EvgeniyKrasnyanskiy/AIContour/releases/latest"
+                url = "https://github.com/EvgeniyKrasnyanskiy/ASS/releases/latest"
                 headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
                 response = requests.get(url, headers=headers, timeout=5, allow_redirects=True)
                 
@@ -1800,8 +1800,8 @@ if PYQT_AVAILABLE:
             lbl_local_aet_lbl = QLabel("AET")
             lbl_local_aet_lbl.setStyleSheet("color: #a0a0a0;")
             
-            self.elekta_local_aet_edit = QLineEdit("AIC_SCP")
-            self.elekta_local_aet_edit.setPlaceholderText("AIC_SCP")
+            self.elekta_local_aet_edit = QLineEdit("ASS_SCP")
+            self.elekta_local_aet_edit.setPlaceholderText("ASS_SCP")
             self.elekta_local_aet_edit.setFixedWidth(200)
             
             lbl_local_port_desc = QLabel("Port")
@@ -2162,9 +2162,9 @@ if PYQT_AVAILABLE:
 </style>
 </head>
 <body>
-    <h1>Справка по работе с AI Contour📖</h1>
+    <h1>Справка по работе с ASS (Auto Segmentation System) 📖</h1>
 
-    <p><b>AI Contour</b> — интеллектуальное ПО для автоматического сегментирования органов риска (OAR) на КТ-снимках DICOM с использованием нейросети <b>TotalSegmentator</b>.</p>
+    <p><b>ASS (Auto Segmentation System)</b> — интеллектуальное ПО для автоматического сегментирования органов риска (OAR) на КТ-снимках DICOM с использованием нейросети <b>TotalSegmentator</b>.</p>
 
     <div class="card">
         <h2>Основные возможности 🚀</h2>
@@ -2571,7 +2571,7 @@ if PYQT_AVAILABLE:
                     try:
                         from pynetdicom import AE
                         
-                        ae = AE(ae_title=b"AIC_TEST_SCU")
+                        ae = AE(ae_title=b"ASS_TEST_SCU")
                         ae.add_requested_context('1.2.840.10008.1.1')
                         
                         # Выполняем проверку C-ECHO
@@ -3002,7 +3002,7 @@ if PYQT_AVAILABLE:
                 
                 elekta_mode_enabled = False
                 try:
-                    elekta_local_aet = str(self.settings.value("elekta_local_aet", "AIC_SCP"))
+                    elekta_local_aet = str(self.settings.value("elekta_local_aet", "ASS_SCP"))
                     self.elekta_local_aet_edit.setText(elekta_local_aet)
                     
                     elekta_local_port = str(self.settings.value("elekta_local_port", "10404"))
@@ -3217,7 +3217,7 @@ if PYQT_AVAILABLE:
                     self.sync_config_from_server()
                     QMessageBox.information(
                         self, "Успех", 
-                        f"Успешное соединение с сервером AI Contour!\n\n"
+                        f"Успешное соединение с сервером ASS!\n\n"
                         f"Версия API: {r.json().get('version', 'Неизвестно')}\n"
                         f"Статус паузы очереди: {'Приостановлена' if r.json().get('is_paused') else 'Активна'}"
                     )
@@ -5468,7 +5468,7 @@ if PYQT_AVAILABLE:
                 # Считываем настройки из полей ввода
                 port_str = self.elekta_local_port_edit.text().strip()
                 port = int(port_str) if port_str.isdigit() else 10404
-                ae_title = self.elekta_local_aet_edit.text().strip() or "AIC_SCP"
+                ae_title = self.elekta_local_aet_edit.text().strip() or "ASS_SCP"
                 
                 # Запускаем SCP-сервер
                 self.elekta_manager.start_receiver(
@@ -6660,9 +6660,9 @@ if PYQT_AVAILABLE:
 </style>
 </head>
 <body>
-    <h1>Справка по работе с AI Contour 📖</h1>
+    <h1>Справка по работе с ASS (Auto Segmentation System) 📖</h1>
     
-    <p><b>AI Contour</b> — это интеллектуальное программное обеспечение, разработанное для автоматического сегментирования критических органов риска (OAR) на КТ-изображениях DICOM с использованием искусственной нейросети <b>TotalSegmentator</b>.</p>
+    <p><b>ASS (Auto Segmentation System)</b> — это интеллектуальное программное обеспечение, разработанное для автоматического сегментирования критических органов риска (OAR) на КТ-изображениях DICOM с использованием искусственной нейросети <b>TotalSegmentator</b>.</p>
 
     <div class="card">
         <h2>Основные возможности 🚀</h2>

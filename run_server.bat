@@ -1,5 +1,5 @@
 @echo off
-title AI Contour - Server Monitor
+title ASS - Server Monitor
 cd /d "%~dp0"
 
 echo [1/2] Activating virtual environment (venv)...
@@ -12,7 +12,7 @@ if not exist "venv\Scripts\activate.bat" (
 
 call venv\Scripts\activate.bat
 
-echo [2/2] Starting AI Contour Server...
+echo [2/2] Starting ASS Server...
 venv\Scripts\python.exe server_app.py
 
 if %errorlevel% neq 0 (

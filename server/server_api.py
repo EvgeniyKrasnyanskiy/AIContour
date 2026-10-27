@@ -101,7 +101,7 @@ class ClientTrackerMiddleware(BaseHTTPMiddleware):
         return response
 
 app = FastAPI(
-    title="AI Contour API Server",
+    title="ASS API Server",
     description="REST API для автоматического оконтуривания критических органов на КТ",
     version="2.0.0"
 )

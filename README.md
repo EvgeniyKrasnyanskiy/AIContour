@@ -51,14 +51,14 @@ pip install -r requirements.txt
 > [!NOTE]
 > Для работы с GPU-ускорением на сервере должна быть установлена видеокарта NVIDIA с поддержкой CUDA и соответствующие библиотеки PyTorch с поддержкой CUDA (`pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121`).
 
-### 2. Запуск сервера AI Contour
+### 2. Запуск сервера ASS
 Серверную часть (API + Монитор очереди) можно запустить одной командой:
 ```powershell
 python server_app.py
 ```
 FastAPI запустится в фоновом режиме на `http://127.0.0.1:8000`. Монитор очереди отобразит статус готовности.
 
-### 3. Запуск клиента AI Contour
+### 3. Запуск клиента ASS
 Запустите клиентское приложение на любом ПК в той же локальной сети:
 ```powershell
 python client_app.py
