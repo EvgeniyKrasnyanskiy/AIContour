@@ -75,5 +75,14 @@ class TestUIAndElektaFilter(unittest.TestCase):
         s3.bind(('127.0.0.1', free_port))
         s3.close()
 
+    def test_server_device_settings_fallback(self):
+        from server.queue_manager import _get_server_use_gpu_setting, _get_server_selected_gpu_setting
+        # Проверяем, что функции безопасно считывают параметры сервера и возвращают ожидаемые типы
+        use_gpu = _get_server_use_gpu_setting()
+        self.assertIsInstance(use_gpu, bool)
+        gpu_idx = _get_server_selected_gpu_setting()
+        self.assertIsInstance(gpu_idx, int)
+
 if __name__ == '__main__':
     unittest.main()
+

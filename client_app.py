@@ -673,10 +673,10 @@ if PYQT_AVAILABLE:
             selected_organs: List[str],
             merge_mode: bool,
             existing_rtstruct_path: Optional[str],
-            use_gpu: bool,
             remove_blobs: bool,
             smoothing_sigma: float,
-            custom_temp_dir: Optional[str] = None
+            custom_temp_dir: Optional[str] = None,
+            use_gpu: Optional[bool] = None
         ):
             super().__init__()
             self.server_url = server_url
@@ -752,7 +752,6 @@ if PYQT_AVAILABLE:
                             'precision_mode': self.precision_mode,
                             'selected_organs': self.selected_organs,
                             'merge_mode': self.merge_mode,
-                            'use_gpu': self.use_gpu,
                             'remove_blobs': self.remove_blobs,
                             'smoothing_sigma': self.smoothing_sigma
                         })
@@ -1906,27 +1905,8 @@ if PYQT_AVAILABLE:
             self.merge_rtstruct_combo.currentIndexChanged.connect(self.on_merge_rtstruct_changed)
             
             tab2_layout.addWidget(merge_group)
-            
-            gpu_available = self.engine.is_gpu_available()
 
-            # Группа 1: Вычислительное устройство
-            device_group = QGroupBox("Вычислительное устройство")
-            device_group_layout = QVBoxLayout(device_group)
-            device_group_layout.setSpacing(10)
-            self.radio_cpu = QRadioButton("CPU (Центральный процессор)")
-            self.radio_gpu = QRadioButton("GPU CUDA (Рекомендуется)")
-            
-            # На клиенте обе опции (GPU/CPU) доступны для выбора и передаются серверу в задачу
-            self.radio_gpu.setChecked(True)
-            self.radio_gpu.setEnabled(True)
-            self.radio_gpu.toggled.connect(self.save_settings)
-            self.radio_cpu.toggled.connect(self.save_settings)
-                
-            device_group_layout.addWidget(self.radio_gpu)
-            device_group_layout.addWidget(self.radio_cpu)
-            tab2_layout.addWidget(device_group)
-
-            # Группа 2: Режимы точности TotalSegmentator
+            # Группа: Режимы точности TotalSegmentator
             precision_group = QGroupBox("Точность и разрешение ИИ")
             precision_group_layout = QVBoxLayout(precision_group)
             
@@ -2990,20 +2970,6 @@ if PYQT_AVAILABLE:
                 play_sound = self.settings.value("play_sound", True, type=bool)
                 self.sound_check.setChecked(play_sound)
 
-                # Загружаем выбранные ресурсы
-                raw_gpu = self.settings.value("use_gpu", True)
-                if isinstance(raw_gpu, str):
-                    use_gpu = raw_gpu.strip().lower() in ("true", "1", "yes")
-                else:
-                    use_gpu = bool(raw_gpu)
-
-                self.radio_gpu.blockSignals(True)
-                self.radio_cpu.blockSignals(True)
-                self.radio_gpu.setChecked(use_gpu)
-                self.radio_cpu.setChecked(not use_gpu)
-                self.radio_gpu.blockSignals(False)
-                self.radio_cpu.blockSignals(False)
-
                 # Загружаем параметры Elekta mod с блокировкой сигналов, чтобы не затереть QSettings
                 self.elekta_local_aet_edit.blockSignals(True)
                 self.elekta_local_port_edit.blockSignals(True)
@@ -3106,7 +3072,6 @@ if PYQT_AVAILABLE:
             self.settings.setValue("smoothing_idx", self.smoothing_combo.currentIndex())
             self.settings.setValue("color_preset", self.color_preset_combo.currentText())
             self.settings.setValue("play_sound", self.sound_check.isChecked())
-            self.settings.setValue("use_gpu", "true" if self.radio_gpu.isChecked() else "false")
             self.settings.sync()
             
             # Сохраняем параметры Elekta mod
@@ -5582,7 +5547,6 @@ if PYQT_AVAILABLE:
                     selected_organs=selected_organs,
                     merge_mode=merge_mode,
                     existing_rtstruct_path=self.existing_rtstruct_path,
-                    use_gpu=self.radio_gpu.isChecked(),
                     remove_blobs=self.clean_blobs_check.isChecked(),
                     smoothing_sigma=smoothing_sigma,
                     custom_temp_dir=self.temp_dir_edit.text().strip() if hasattr(self, "temp_dir_edit") else None
@@ -5627,10 +5591,6 @@ if PYQT_AVAILABLE:
                 self.smoothing_combo.setEnabled(False)
                 
             self.color_preset_combo.setEnabled(enabled)
-            
-            # Блокировка переключателей устройства
-            self.radio_cpu.setEnabled(enabled)
-            self.radio_gpu.setEnabled(enabled)
             
             # Блокировка/восстановление переключателей слияния RTSTRUCT
             if enabled:
@@ -6133,7 +6093,7 @@ if PYQT_AVAILABLE:
                 organs = self.worker.selected_organs if self.worker else []
                 preset = self.preset_combo.currentText()
                 precision = self.precision_combo.currentText()
-                device = "GPU" if self.radio_gpu.isChecked() else "CPU"
+                device = getattr(self.worker, 'last_device', 'Сервер')
 
                 if success:
                     self.stats_manager.record_run(
