@@ -1748,8 +1748,6 @@ if PYQT_AVAILABLE:
             
             # Двойной клик по элементу списка для выбора цвета
             self.organs_list.itemDoubleClicked.connect(self.pick_organ_color)
-            self.organs_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            self.organs_list.customContextMenuRequested.connect(self.show_organs_context_menu)
             
             self.tab_widget.addTab(tab1_widget, "🎯 Контуры")
 
@@ -5258,62 +5256,6 @@ if PYQT_AVAILABLE:
             if ru_name != rt_name:
                 return f"{ru_name} ({rt_name})"
             return rt_name
-
-        def show_organs_context_menu(self, pos):
-            """Отображает контекстное меню для органа с возможностью переименования в RTStruct."""
-            item = self.organs_list.itemAt(pos)
-            if not item:
-                return
-            org = item.data(Qt.ItemDataRole.UserRole)
-            if not org or org == "header":
-                return
-            
-            menu = QMenu(self)
-            rename_action = menu.addAction("✏️ Переименовать структуру в RTStruct")
-            action = menu.exec(self.organs_list.viewport().mapToGlobal(pos))
-            
-            if action == rename_action:
-                curr_rt_name = getattr(self.engine, 'get_rtstruct_name', lambda o: o)(org)
-                new_name, ok = QInputDialog.getText(
-                    self,
-                    "Имя структуры в RTStruct",
-                    f"Введите имя структуры '{org}' для RTStruct:",
-                    text=curr_rt_name
-                )
-                if ok and new_name.strip():
-                    new_name = new_name.strip()
-                    if not hasattr(self.engine, "structure_names"):
-                        self.engine.structure_names = {}
-                    self.engine.structure_names[org] = new_name
-                    if hasattr(self.engine, "save_presets_config"):
-                        self.engine.save_presets_config()
-                    
-                    # Отправляем на сервер, если сервер настроен
-                    server_url = self.get_server_url()
-                    if server_url:
-                        client_id = self.client_name_edit.text().strip()
-                        headers = {"X-Client-ID": client_id}
-                        try:
-                            import requests
-                            requests.post(
-                                f"{server_url}/api/config/structure_names",
-                                json={"structure_names": {org: new_name}},
-                                headers=headers,
-                                timeout=5
-                            )
-                        except Exception as se:
-                            logger.warning(f"Не удалось отправить переименование на сервер: {se}")
-
-                    # Обновляем отображаемое имя для всех вхождений этого органа в списке
-                    disp_name = self.get_organ_display_name(org)
-                    for i in range(self.organs_list.count()):
-                        itm = self.organs_list.item(i)
-                        if itm.data(Qt.ItemDataRole.UserRole) == org:
-                            if "[🔒]" in itm.text():
-                                itm.setText(f"   [🔒] {disp_name} (Нужна лицензия)")
-                            else:
-                                itm.setText(f"   {disp_name}")
-                    logger.info(f"Структура '{org}' переименована в RTStruct: '{new_name}'")
 
         def on_color_preset_changed(self, text: str):
             """Слот изменения цветового пресета."""
