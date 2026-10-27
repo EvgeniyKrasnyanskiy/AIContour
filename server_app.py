@@ -1871,13 +1871,31 @@ if PYQT_AVAILABLE:
                                 if self.is_cancelled:
                                     self.finished_signal.emit(False, "Отменено пользователем.", 0)
                                     return
-                                dirs[:] = [d for d in dirs if not any(ex == d or ex in d for ex in excludes)]
+                                def _is_excluded_dir(d_name: str) -> bool:
+                                    for ex in excludes:
+                                        if ex.startswith("."):
+                                            if d_name.startswith(ex) or d_name.endswith(ex):
+                                                return True
+                                        elif d_name == ex:
+                                            return True
+                                    return False
+
+                                def _is_excluded_file(f_name: str) -> bool:
+                                    for ex in excludes:
+                                        if ex.startswith("."):
+                                            if f_name.endswith(ex):
+                                                return True
+                                        elif f_name == ex:
+                                            return True
+                                    return False
+
+                                dirs[:] = [d for d in dirs if not _is_excluded_dir(d)]
                                 for d in dirs:
                                     rel_d = (Path(root) / d).relative_to(p).as_posix()
                                     full_d = f"{clean_prefix}/{rel_d}" if clean_prefix else rel_d
                                     dir_tasks.add(full_d)
                                 for f in files:
-                                    if any(f.endswith(ex) or ex in f for ex in excludes):
+                                    if _is_excluded_file(f):
                                         continue
                                     fp = Path(root) / f
                                     rel = fp.relative_to(p).as_posix()
@@ -4205,13 +4223,13 @@ ID воркера     : {w_id}
                     # 6.3. Стандартная библиотека Python
                     lib_dir = base_py_dir / "Lib"
                     if lib_dir.exists():
-                        entries.append(("dir", lib_dir, "venv/Lib", ["site-packages", "__pycache__", ".tmp", ".log", "test", "tests"]))
+                        entries.append(("dir", lib_dir, "venv/Lib", ["site-packages", "__pycache__", ".tmp", ".log", ".pyc"]))
 
                     # 6.4. Установленные пакеты ИИ из site-packages виртуального окружения
                     venv_site_pkgs = Path("venv/Lib/site-packages")
                     if venv_site_pkgs.exists():
                         entries.append(("dir", venv_site_pkgs, "venv/Lib/site-packages", [
-                            "__pycache__", ".tmp", ".log", ".pytest_cache", ".git", "tests", "examples"
+                            "__pycache__", ".tmp", ".log", ".pytest_cache", ".git", ".pyc"
                         ]))
 
                 # 7. Веса TotalSegmentator (автономная работа без интернета)
