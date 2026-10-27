@@ -200,7 +200,8 @@ try:
         QMessageBox, QFrame, QSplitter, QCheckBox, QDialog, QTextBrowser,
         QTabWidget, QColorDialog, QGroupBox, QGridLayout, QSizePolicy,
         QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QMenu,
-        QProgressDialog, QScrollArea, QStyledItemDelegate, QStyleOptionViewItem
+        QProgressDialog, QScrollArea, QStyledItemDelegate, QStyleOptionViewItem,
+        QInputDialog
     )
     from PyQt6.QtCore import QThread, pyqtSignal, Qt, QObject, QSettings, QTimer, QModelIndex
     from PyQt6.QtGui import QTextCursor, QBrush, QColor, QFont, QIcon, QPixmap, QPalette
@@ -278,6 +279,7 @@ if ContourEngine is None:
         """Легковесный клиентский класс для загрузки конфигурации без тяжелых ML библиотек."""
         def __init__(self, *args, **kwargs):
             self.ru_names = {}
+            self.structure_names = {}
             self.colors = {}
             self.presets = {}
             self.licenses = ""
@@ -298,6 +300,7 @@ if ContourEngine is None:
             config_dir = (base_dir / "config").resolve()
             colors_path = config_dir / "colors.json"
             translations_path = config_dir / "translations.json"
+            structure_names_path = config_dir / "structure_names.json"
             presets_dir = config_dir / "presets"
             licenses_path = config_dir / "licenses.json"
             
@@ -308,6 +311,9 @@ if ContourEngine is None:
                 if translations_path.exists():
                     with open(translations_path, "r", encoding="utf-8") as f:
                         self.ru_names = json.load(f)
+                if structure_names_path.exists():
+                    with open(structure_names_path, "r", encoding="utf-8") as f:
+                        self.structure_names = json.load(f)
                 if presets_dir.exists():
                     for p_file in presets_dir.glob("*.json"):
                         with open(p_file, "r", encoding="utf-8") as f:
@@ -338,6 +344,7 @@ if ContourEngine is None:
             
             colors_path = config_dir / "colors.json"
             translations_path = config_dir / "translations.json"
+            structure_names_path = config_dir / "structure_names.json"
             licenses_path = config_dir / "licenses.json"
             
             try:
@@ -345,6 +352,9 @@ if ContourEngine is None:
                     json.dump(self.colors, f, ensure_ascii=False, indent=2)
                 with open(translations_path, "w", encoding="utf-8") as f:
                     json.dump(self.ru_names, f, ensure_ascii=False, indent=2)
+                if hasattr(self, "structure_names") and self.structure_names:
+                    with open(structure_names_path, "w", encoding="utf-8") as f:
+                        json.dump(self.structure_names, f, ensure_ascii=False, indent=2)
                 with open(licenses_path, "w", encoding="utf-8") as f:
                     json.dump({"license_key": getattr(self, "licenses", "")}, f, ensure_ascii=False, indent=2)
             except Exception as e:
@@ -368,6 +378,14 @@ if ContourEngine is None:
                 
             pretty = pretty.replace("_", " ").title()
             return pretty
+            
+        def get_rtstruct_name(self, organ_name: str) -> str:
+            """Возвращает имя структуры для RTSTRUCT с приоритетом из structure_names.json."""
+            if hasattr(self, "structure_names") and isinstance(self.structure_names, dict):
+                custom = self.structure_names.get(organ_name)
+                if custom and isinstance(custom, str) and custom.strip():
+                    return custom.strip()
+            return self.get_monaco_pretty_name(organ_name)
             
         def _get_default_color(self, organ_name: str):
             import hashlib
@@ -1730,6 +1748,8 @@ if PYQT_AVAILABLE:
             
             # Двойной клик по элементу списка для выбора цвета
             self.organs_list.itemDoubleClicked.connect(self.pick_organ_color)
+            self.organs_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            self.organs_list.customContextMenuRequested.connect(self.show_organs_context_menu)
             
             self.tab_widget.addTab(tab1_widget, "🎯 Контуры")
 
@@ -2735,8 +2755,8 @@ if PYQT_AVAILABLE:
 
                 for org in organs:
                     placed_organs.add(org)
-                    # Проверяем, есть ли такой орган в ru_names
-                    ru_name = self.engine.ru_names.get(org, org)
+                    # Проверяем отображаемое имя с учетом RTStruct
+                    disp_name = self.get_organ_display_name(org)
                     
                     # Проверка лицензии для суб-моделей
                     task = ROI_TO_TASK_MAP.get(org, 'total')
@@ -2744,11 +2764,11 @@ if PYQT_AVAILABLE:
                     has_license = hasattr(self.engine, "licenses") and isinstance(self.engine.licenses, str) and self.engine.licenses.strip()
                     
                     if is_licensed_task and not has_license:
-                        item = QListWidgetItem(f"   [🔒] {ru_name} (Нужна лицензия)")
+                        item = QListWidgetItem(f"   [🔒] {disp_name} (Нужна лицензия)")
                         item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable & ~Qt.ItemFlag.ItemIsEnabled)
                         item.setForeground(QBrush(QColor("#777777")))
                     else:
-                        item = QListWidgetItem(f"   {ru_name}")
+                        item = QListWidgetItem(f"   {disp_name}")
                         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                         item.setCheckState(Qt.CheckState.Unchecked)
                         
@@ -2805,7 +2825,7 @@ if PYQT_AVAILABLE:
                 self.organs_list.addItem(other_header)
                 
                 for org in other_organs:
-                    ru_name = self.engine.ru_names.get(org, org)
+                    disp_name = self.get_organ_display_name(org)
                     
                     # Проверка лицензии для суб-моделей
                     task = ROI_TO_TASK_MAP.get(org, 'total')
@@ -2813,11 +2833,11 @@ if PYQT_AVAILABLE:
                     has_license = hasattr(self.engine, "licenses") and isinstance(self.engine.licenses, str) and self.engine.licenses.strip()
                     
                     if is_licensed_task and not has_license:
-                        item = QListWidgetItem(f"   [🔒] {ru_name} (Нужна лицензия)")
+                        item = QListWidgetItem(f"   [🔒] {disp_name} (Нужна лицензия)")
                         item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable & ~Qt.ItemFlag.ItemIsEnabled)
                         item.setForeground(QBrush(QColor("#777777")))
                     else:
-                        item = QListWidgetItem(f"   {ru_name}")
+                        item = QListWidgetItem(f"   {disp_name}")
                         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                         item.setCheckState(Qt.CheckState.Unchecked)
                         
@@ -2876,6 +2896,9 @@ if PYQT_AVAILABLE:
                         mon_pretty = self.engine.get_monaco_pretty_name(org)
                         if mon_pretty:
                             supported_norm_map[normalize_name(mon_pretty)] = org
+                        rt_name = getattr(self.engine, 'get_rtstruct_name', lambda o: o)(org)
+                        if rt_name:
+                            supported_norm_map[normalize_name(rt_name)] = org
 
                     def get_mapped_organ(roi_name_str: str) -> str:
                         norm = normalize_name(roi_name_str)
@@ -3131,7 +3154,10 @@ if PYQT_AVAILABLE:
                     self.engine.colors = data.get("colors", {})
                     self.global_colors = self.engine.colors.copy()
                     self.engine.ru_names = data.get("ru_names", {})
+                    self.engine.structure_names = data.get("structure_names", {})
                     self.engine.licenses = data.get("licenses", "")
+                    if hasattr(self.engine, "save_presets_config"):
+                        self.engine.save_presets_config()
                     
                     # 3. Полностью инициализируем пресеты и органы в GUI
                     self.init_presets_and_organs()
@@ -5221,6 +5247,73 @@ if PYQT_AVAILABLE:
                 # Если включен показ структур, перерисуем их с новым цветом
                 if hasattr(self, 'chk_show_structures') and self.chk_show_structures.isChecked():
                     self.on_show_structures_changed()
+
+        def get_organ_display_name(self, org: str) -> str:
+            """Возвращает отображаемое имя структуры с учетом кастомного имени RTStruct."""
+            ru_name = self.engine.ru_names.get(org, org) if hasattr(self, "engine") and hasattr(self.engine, "ru_names") else org
+            rt_name = getattr(self.engine, 'get_rtstruct_name', lambda o: o)(org) if hasattr(self, "engine") else org
+            if "(" in ru_name and ru_name.endswith(")"):
+                ru_base = ru_name.rsplit("(", 1)[0].strip()
+                return f"{ru_base} ({rt_name})"
+            if ru_name != rt_name:
+                return f"{ru_name} ({rt_name})"
+            return rt_name
+
+        def show_organs_context_menu(self, pos):
+            """Отображает контекстное меню для органа с возможностью переименования в RTStruct."""
+            item = self.organs_list.itemAt(pos)
+            if not item:
+                return
+            org = item.data(Qt.ItemDataRole.UserRole)
+            if not org or org == "header":
+                return
+            
+            menu = QMenu(self)
+            rename_action = menu.addAction("✏️ Переименовать структуру в RTStruct")
+            action = menu.exec(self.organs_list.viewport().mapToGlobal(pos))
+            
+            if action == rename_action:
+                curr_rt_name = getattr(self.engine, 'get_rtstruct_name', lambda o: o)(org)
+                new_name, ok = QInputDialog.getText(
+                    self,
+                    "Имя структуры в RTStruct",
+                    f"Введите имя структуры '{org}' для RTStruct:",
+                    text=curr_rt_name
+                )
+                if ok and new_name.strip():
+                    new_name = new_name.strip()
+                    if not hasattr(self.engine, "structure_names"):
+                        self.engine.structure_names = {}
+                    self.engine.structure_names[org] = new_name
+                    if hasattr(self.engine, "save_presets_config"):
+                        self.engine.save_presets_config()
+                    
+                    # Отправляем на сервер, если сервер настроен
+                    server_url = self.get_server_url()
+                    if server_url:
+                        client_id = self.client_name_edit.text().strip()
+                        headers = {"X-Client-ID": client_id}
+                        try:
+                            import requests
+                            requests.post(
+                                f"{server_url}/api/config/structure_names",
+                                json={"structure_names": {org: new_name}},
+                                headers=headers,
+                                timeout=5
+                            )
+                        except Exception as se:
+                            logger.warning(f"Не удалось отправить переименование на сервер: {se}")
+
+                    # Обновляем отображаемое имя для всех вхождений этого органа в списке
+                    disp_name = self.get_organ_display_name(org)
+                    for i in range(self.organs_list.count()):
+                        itm = self.organs_list.item(i)
+                        if itm.data(Qt.ItemDataRole.UserRole) == org:
+                            if "[🔒]" in itm.text():
+                                itm.setText(f"   [🔒] {disp_name} (Нужна лицензия)")
+                            else:
+                                itm.setText(f"   {disp_name}")
+                    logger.info(f"Структура '{org}' переименована в RTStruct: '{new_name}'")
 
         def on_color_preset_changed(self, text: str):
             """Слот изменения цветового пресета."""

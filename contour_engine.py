@@ -214,6 +214,7 @@ class ContourEngine:
         self.preset_colors: Dict[str, Dict[str, List[int]]] = {}
         self.colors: Dict[str, List[int]] = {}
         self.ru_names: Dict[str, str] = {}
+        self.structure_names: Dict[str, str] = {}
         self.load_presets_config()
 
     def _get_default_color(self, organ_name: str) -> List[int]:
@@ -731,6 +732,7 @@ class ContourEngine:
             self.presets_dir = self.config_dir / "presets"
             self.colors_path = self.config_dir / "colors.json"
             self.translations_path = self.config_dir / "translations.json"
+            self.structure_names_path = self.config_dir / "structure_names.json"
             self.licenses_path = self.config_dir / "licenses.json"
             
             # 1. Плавная миграция
@@ -762,6 +764,20 @@ class ContourEngine:
                 with open(self.translations_path, "w", encoding="utf-8") as f:
                     json.dump(self.ru_names, f, ensure_ascii=False, indent=2)
                 
+            # 4.5. Загрузка DICOM RTSTRUCT названий структур
+            if self.structure_names_path.exists():
+                with open(self.structure_names_path, "r", encoding="utf-8") as f:
+                    self.structure_names = json.load(f)
+            else:
+                logger.info(f"Файл названий структур не найден. Создание {self.structure_names_path} из переводов...")
+                self.structure_names = {}
+                import re
+                for k, v in self.ru_names.items():
+                    m = re.search(r'\(([^)]+)\)', v)
+                    self.structure_names[k] = m.group(1).strip() if m else v.strip()
+                with open(self.structure_names_path, "w", encoding="utf-8") as f:
+                    json.dump(self.structure_names, f, ensure_ascii=False, indent=2)
+
             # 5. Загрузка лицензий
             if self.licenses_path.exists():
                 with open(self.licenses_path, "r", encoding="utf-8") as f:
@@ -835,6 +851,11 @@ class ContourEngine:
             with open(self.translations_path, "w", encoding="utf-8") as f:
                 json.dump(self.ru_names, f, ensure_ascii=False, indent=2)
                 
+            # 2.5. Сохранение названий структур для RTSTRUCT
+            if hasattr(self, 'structure_names') and hasattr(self, 'structure_names_path'):
+                with open(self.structure_names_path, "w", encoding="utf-8") as f:
+                    json.dump(self.structure_names, f, ensure_ascii=False, indent=2)
+
             # 3. Сохранение лицензии
             with open(self.licenses_path, "w", encoding="utf-8") as f:
                 json.dump({"license_key": getattr(self, "licenses", "")}, f, ensure_ascii=False, indent=2)
@@ -875,6 +896,29 @@ class ContourEngine:
             logger.debug("Конфигурация пресетов успешно сохранена.")
         except Exception as e:
             logger.error(f"Не удалось сохранить конфигурацию: {e}")
+
+    def save_structure_names(self) -> None:
+        """Сохраняет пользовательские названия структур для RTSTRUCT в config/structure_names.json."""
+        try:
+            if not hasattr(self, 'structure_names_path'):
+                self.structure_names_path = Path("config/structure_names.json").resolve()
+            self.structure_names_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.structure_names_path, "w", encoding="utf-8") as f:
+                json.dump(self.structure_names, f, ensure_ascii=False, indent=2)
+            logger.info(f"Файл названий структур успешно сохранен: {self.structure_names_path}")
+        except Exception as e:
+            logger.error(f"Не удалось сохранить structure_names.json: {e}")
+
+    def get_rtstruct_name(self, organ_name: str) -> str:
+        """
+        Возвращает имя структуры, которое будет записано в DICOM RTSTRUCT.
+        Приоритет:
+        1. Пользовательское имя из config/structure_names.json
+        2. Форматированное имя Monaco pretty name
+        """
+        if hasattr(self, 'structure_names') and organ_name in self.structure_names:
+            return self.structure_names[organ_name]
+        return self.get_monaco_pretty_name(organ_name)
 
     @staticmethod
     def get_monaco_pretty_name(organ_name: str) -> str:
@@ -1733,9 +1777,9 @@ class ContourEngine:
                                 adj_color = [adj_color[0], min(255, adj_color[1] + 40 * i), adj_color[2]]
                             roi_names_to_add.append((alias, adj_color))
                     else:
-                        # Стандартное английское название, совместимое с Elekta Monaco 5.51
-                        pretty_name = self.get_monaco_pretty_name(organ_name)
-                        roi_names_to_add.append((pretty_name, color))
+                        # Название структуры из пользовательских настроек RTSTRUCT сервера
+                        roi_name = self.get_rtstruct_name(organ_name)
+                        roi_names_to_add.append((roi_name, color))
                     
                     # Добавление в RTSTRUCT
                     for roi_name, roi_color in roi_names_to_add:

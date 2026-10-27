@@ -440,8 +440,42 @@ def get_server_config():
         "preset_colors": engine.preset_colors,
         "colors": engine.colors,
         "ru_names": engine.ru_names,
+        "structure_names": getattr(engine, "structure_names", {}),
         "licenses": getattr(engine, "licenses", "")
     }
+
+class StructureRenamePayload(BaseModel):
+    organ: Optional[str] = None
+    name: Optional[str] = None
+    structure_names: Optional[Dict[str, str]] = None
+
+@app.post("/api/config/structure_names")
+def rename_structure(payload: StructureRenamePayload):
+    """
+    Переименовывает структуру (или пакет структур) для RTSTRUCT на сервере.
+    """
+    engine = queue_manager.engine
+    updated = {}
+    if payload.structure_names:
+        for org, nm in payload.structure_names.items():
+            org_s = org.strip()
+            nm_s = nm.strip()
+            if org_s and nm_s:
+                engine.structure_names[org_s] = nm_s
+                updated[org_s] = nm_s
+    if payload.organ and payload.name:
+        org_s = payload.organ.strip()
+        nm_s = payload.name.strip()
+        if org_s and nm_s:
+            engine.structure_names[org_s] = nm_s
+            updated[org_s] = nm_s
+            
+    if not updated:
+        raise HTTPException(status_code=400, detail="Не указаны структуры для переименования")
+    
+    engine.save_structure_names()
+    logger.info(f"Структуры переименованы для RTSTRUCT: {updated}")
+    return {"status": "ok", "updated": updated}
 
 @app.post("/api/presets")
 def save_server_preset(payload: PresetPayload):
