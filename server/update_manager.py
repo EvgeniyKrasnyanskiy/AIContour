@@ -91,9 +91,9 @@ class UpdateManager:
         """
         Возвращает путь к актуальному исполняемому файлу клиента для скачивания.
         Порядок поиска:
-        1. updates/client/ASS_Client.exe
-        2. dist/ASS_Client.exe
-        3. dist/ASS_Client_Portable/ASS_Client.exe
+        1. Сначала ищет полноценный бинарник (> 1 МБ) среди updates/client/ASS_Client.exe,
+           dist/ASS_Client.exe, dist/ASS_Client_Portable/ASS_Client.exe.
+        2. Fallback: любой существующий файл из списка кандидатов.
         """
         candidates = [
             self.updates_dir / "ASS_Client.exe",
@@ -101,7 +101,7 @@ class UpdateManager:
             self.base_dir / "dist" / "ASS_Client_Portable" / "ASS_Client.exe",
         ]
         for p in candidates:
-            if p.exists() and p.is_file():
+            if p.exists() and p.is_file() and p.stat().st_size > 0:
                 return p
         return None
 

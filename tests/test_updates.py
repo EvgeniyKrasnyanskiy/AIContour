@@ -20,7 +20,27 @@ from server.server_api import app, update_manager
 
 class TestVersionAndUpdates(unittest.TestCase):
     def setUp(self):
+        import tempfile
+        import shutil
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.orig_updates_dir = update_manager.updates_dir
+        self.orig_metadata_file = update_manager.metadata_file
+
+        temp_path = Path(self.temp_dir.name)
+        update_manager.updates_dir = temp_path
+        update_manager.metadata_file = temp_path / "version.json"
+
+        # Копируем существующий version.json во временную папку, если он есть
+        if self.orig_metadata_file.exists():
+            shutil.copy2(str(self.orig_metadata_file), str(update_manager.metadata_file))
+        (temp_path / "ASS_Client.exe").write_bytes(b"MZ_INITIAL_CLIENT_STUB")
+
         self.client = TestClient(app)
+
+    def tearDown(self):
+        update_manager.updates_dir = self.orig_updates_dir
+        update_manager.metadata_file = self.orig_metadata_file
+        self.temp_dir.cleanup()
 
     def test_version_helpers(self):
         self.assertEqual(parse_version_tuple("2.0.31"), (2, 0, 31))

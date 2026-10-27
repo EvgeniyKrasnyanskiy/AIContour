@@ -3185,14 +3185,18 @@ if PYQT_AVAILABLE:
 
             local_ip = get_local_ip()
             client_binary = self.server_update_mgr.get_client_binary_path()
-            if not client_binary or not client_binary.exists():
-                QMessageBox.warning(
-                    self, 
-                    "Файл не найден", 
-                    "Исполняемый файл ASS_Client.exe не найден в дистрибутиве или хранилище обновлений.\n\n"
-                    "Сначала загрузите или скомпилируйте ASS_Client.exe."
-                )
-                return
+            if not client_binary or not client_binary.exists() or client_binary.stat().st_size < 1024 * 1024:
+                dist_alt = Path("dist/ASS_Client.exe")
+                if dist_alt.exists() and dist_alt.stat().st_size > 1024 * 1024:
+                    client_binary = dist_alt
+                else:
+                    QMessageBox.warning(
+                        self, 
+                        "Файл не найден или поврежден", 
+                        "Исполняемый файл ASS_Client.exe не найден или имеет невалидный размер (< 1 МБ).\n\n"
+                        "Сначала скомпилируйте ASS_Client.exe или загрузите его через панель обновлений."
+                    )
+                    return
 
             default_zip_name = f"ASS_Client_Configured_{local_ip.replace('.', '_')}.zip"
             save_path, _ = QFileDialog.getSaveFileName(
