@@ -120,7 +120,7 @@ def create_splash_screen(app, is_server: bool = False):
 
         def finish(self, main_window):
             """Закрывает сплэш-скрин и отображает главное окно."""
-            main_window.show()
+            main_window.showMaximized()
             self.close()
 
     splash = ModernSplashScreen()

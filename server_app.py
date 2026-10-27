@@ -1586,7 +1586,8 @@ if PYQT_AVAILABLE:
             self.splash = splash
             self.setWindowTitle("Auto Segmentation System [Сервер]")
             self.setMinimumSize(960, 760)
-            self.showMaximized()
+            if not self.splash:
+                self.showMaximized()
             self.existing_rtstruct_path = None
             self.is_updating_presets = False
             self.collapsed_groups = {"Остальное": True, "Отделы головного мозга (Brain Structures)": True}
