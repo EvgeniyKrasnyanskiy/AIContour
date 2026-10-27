@@ -2169,6 +2169,12 @@ if PYQT_AVAILABLE:
             self.btn_upload_client_exe.clicked.connect(self.upload_new_client_binary_dialog)
             update_admin_layout.addWidget(self.btn_upload_client_exe)
 
+            self.btn_export_configured_client = QPushButton("📦 Экспорт преднастроенного клиента для этой сети...")
+            self.btn_export_configured_client.setObjectName("btnAction")
+            self.btn_export_configured_client.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_export_configured_client.clicked.connect(self.export_configured_client_dialog)
+            update_admin_layout.addWidget(self.btn_export_configured_client)
+
             admin_settings_layout.addWidget(update_admin_group)
             
             # По умолчанию скрываем весь виджет настроек администратора
@@ -3155,6 +3161,68 @@ if PYQT_AVAILABLE:
                 )
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось зарегистрировать файл обновления:\n{e}")
+
+        def export_configured_client_dialog(self):
+            """Создает преднастроенный ZIP-дистрибутив клиента с прописанным IP сервера для быстрой раздачи."""
+            from pathlib import Path
+            import zipfile
+            from PyQt6.QtWidgets import QFileDialog, QMessageBox
+            from src.network.discovery import get_local_ip
+
+            local_ip = get_local_ip()
+            client_binary = self.server_update_mgr.get_client_binary_path()
+            if not client_binary or not client_binary.exists():
+                QMessageBox.warning(
+                    self, 
+                    "Файл не найден", 
+                    "Исполняемый файл ASS_Client.exe не найден в дистрибутиве или хранилище обновлений.\n\n"
+                    "Сначала загрузите или скомпилируйте ASS_Client.exe."
+                )
+                return
+
+            default_zip_name = f"ASS_Client_Configured_{local_ip.replace('.', '_')}.zip"
+            save_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Сохранить преднастроенный архив клиента",
+                default_zip_name,
+                "Архивы ZIP (*.zip)"
+            )
+            if not save_path:
+                return
+
+            try:
+                ini_content = f"""[General]
+server_url=http://{local_ip}:8000
+elekta_mode_enabled=true
+elekta_local_aet=ASS_SCP
+elekta_local_port=10404
+elekta_monaco_aet=MONACO
+elekta_monaco_port=104
+"""
+                bat_content = """@echo off
+chcp 65001 > nul
+start "" "ASS_Client.exe"
+"""
+                with zipfile.ZipFile(save_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                    zf.write(client_binary, "ASS_Client.exe")
+                    zf.writestr("config/client_settings.ini", ini_content)
+                    zf.writestr("run_client.bat", bat_content)
+                    
+                    for icon in ["icon_client.ico", "icon_client.png"]:
+                        p = Path(icon)
+                        if p.exists():
+                            zf.write(p, icon)
+
+                QMessageBox.information(
+                    self,
+                    "Экспорт завершен",
+                    f"Преднастроенный архив клиента успешно сформирован:\n{save_path}\n\n"
+                    f"В файл config/client_settings.ini уже прописан адрес сервера: http://{local_ip}:8000.\n"
+                    f"Врачам достаточно просто распаковать архив и запустить ASS_Client.exe!"
+                )
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка экспорта", f"Не удалось сформировать архив: {e}")
+
 
         def browse_temp_dir(self):
             """Диалог выбора временной папки для КТ (например, RAM-диска R:\\)."""

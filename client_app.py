@@ -201,7 +201,7 @@ try:
         QTabWidget, QColorDialog, QGroupBox, QGridLayout, QSizePolicy,
         QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QMenu,
         QProgressDialog, QScrollArea, QStyledItemDelegate, QStyleOptionViewItem,
-        QInputDialog
+        QInputDialog, QDialogButtonBox
     )
     from PyQt6.QtCore import QThread, pyqtSignal, Qt, QObject, QSettings, QTimer, QModelIndex
     from PyQt6.QtGui import QTextCursor, QBrush, QColor, QFont, QIcon, QPixmap, QPalette
@@ -1614,6 +1614,80 @@ if PYQT_AVAILABLE:
         def wheelEvent(self, event):
             event.ignore()
 
+    class ServerAddressDialog(QDialog):
+        """Диалог быстрой настройки адреса сервера ASS с поддержкой автопоиска в сети."""
+        def __init__(self, parent=None, current_url: str = ""):
+            super().__init__(parent)
+            self.setWindowTitle("Адрес сервера ASS 🌐")
+            self.setMinimumWidth(440)
+            self.selected_url = current_url
+            self.discovery_worker = None
+
+            layout = QVBoxLayout(self)
+            layout.setSpacing(12)
+
+            lbl_desc = QLabel("Введите сетевой адрес сервера ASS или нажмите <b>Автопоиск</b>:")
+            lbl_desc.setWordWrap(True)
+            layout.addWidget(lbl_desc)
+
+            input_layout = QHBoxLayout()
+            self.url_edit = QLineEdit(current_url)
+            self.url_edit.setPlaceholderText("http://192.168.1.100:8000")
+            input_layout.addWidget(self.url_edit, 1)
+
+            self.btn_search = QPushButton("🔍 Автопоиск")
+            self.btn_search.setStyleSheet(
+                "QPushButton { background-color: #3498db; color: white; font-weight: bold; padding: 5px 12px; border-radius: 4px; } "
+                "QPushButton:hover { background-color: #2980b9; }"
+            )
+            self.btn_search.clicked.connect(self.start_search)
+            input_layout.addWidget(self.btn_search)
+            layout.addLayout(input_layout)
+
+            self.lbl_status = QLabel("")
+            self.lbl_status.setStyleSheet("font-size: 11px; color: #bdc3c7;")
+            layout.addWidget(self.lbl_status)
+
+            btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            btn_box.button(QDialogButtonBox.StandardButton.Ok).setText("Подключиться ✅")
+            btn_box.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена ❌")
+            btn_box.accepted.connect(self.accept)
+            btn_box.rejected.connect(self.reject)
+            layout.addWidget(btn_box)
+
+        def start_search(self):
+            self.btn_search.setEnabled(False)
+            self.lbl_status.setText("🔍 Поиск серверов ASS в локальной сети...")
+            self.lbl_status.setStyleSheet("color: #f1c40f;")
+            try:
+                from src.network.discovery import DiscoveryWorker
+                self.discovery_worker = DiscoveryWorker(timeout=2.0)
+                self.discovery_worker.servers_found.connect(self.on_servers_found)
+                self.discovery_worker.start()
+            except Exception as e:
+                self.lbl_status.setText(f"❌ Ошибка: {e}")
+                self.lbl_status.setStyleSheet("color: #e74c3c;")
+                self.btn_search.setEnabled(True)
+
+        def on_servers_found(self, servers: list):
+            self.btn_search.setEnabled(True)
+            if servers:
+                s = servers[0]
+                url = s.get("server_url", "")
+                name = s.get("server_name", "ASS Server")
+                self.url_edit.setText(url)
+                self.lbl_status.setText(f"✅ Обнаружен сервер: {name} ({url})")
+                self.lbl_status.setStyleSheet("color: #2ecc71; font-weight: bold;")
+            else:
+                self.lbl_status.setText("❌ Серверы в локальной сети не найдены.")
+                self.lbl_status.setStyleSheet("color: #e74c3c;")
+
+        def get_url(self) -> str:
+            val = self.url_edit.text().strip().rstrip('/')
+            if val and not val.startswith("http://") and not val.startswith("https://"):
+                val = f"http://{val}"
+            return val
+
     class MainWindow(QMainWindow):
         """Главное окно графического интерфейса приложения."""
         def __init__(self, splash=None):
@@ -2067,9 +2141,15 @@ if PYQT_AVAILABLE:
             conn_group_layout.setSpacing(10)
             
             lbl_server_url = QLabel("Адрес сервера (IP и Порт):")
+            url_row_layout = QHBoxLayout()
             self.server_url_edit = QLineEdit("http://127.0.0.1:8000")
             self.server_url_edit.setPlaceholderText("http://192.168.1.100:8000")
             self.server_url_edit.textChanged.connect(self.on_server_url_changed)
+            self.btn_auto_discover = QPushButton("🔍 Найти в сети")
+            self.btn_auto_discover.setToolTip("Автоматически найти сервер ASS в локальной сети")
+            self.btn_auto_discover.clicked.connect(lambda: self.start_auto_discovery(silent=False))
+            url_row_layout.addWidget(self.server_url_edit, 1)
+            url_row_layout.addWidget(self.btn_auto_discover)
             
             lbl_client_name = QLabel("Идентификатор клиента (Имя ПК):")
             import socket
@@ -2099,7 +2179,7 @@ if PYQT_AVAILABLE:
             self.lbl_conn_status.setStyleSheet("color: #bdc3c7; font-weight: bold;")
             
             conn_group_layout.addWidget(lbl_server_url)
-            conn_group_layout.addWidget(self.server_url_edit)
+            conn_group_layout.addLayout(url_row_layout)
             conn_group_layout.addWidget(lbl_client_name)
             conn_group_layout.addWidget(self.client_name_edit)
             conn_group_layout.addWidget(lbl_temp_dir)
@@ -3419,12 +3499,13 @@ if PYQT_AVAILABLE:
                 logging.warning(f"Не удалось синхронизировать конфигурацию с сервером: {e}")
                 return False
 
-        def test_server_connection(self):
+        def test_server_connection(self, silent: bool = False):
             """Проверяет подключение к указанному FastAPI серверу."""
             import requests
             server_url = self.server_url_edit.text().strip()
             if not server_url:
-                QMessageBox.warning(self, "Ошибка", "Укажите адрес сервера!")
+                if not silent:
+                    QMessageBox.warning(self, "Ошибка", "Укажите адрес сервера!")
                 return
                 
             self.lbl_conn_status.setText("Проверка связи...")
@@ -3439,20 +3520,23 @@ if PYQT_AVAILABLE:
                     self.lbl_conn_status.setText("Статус: подключено 🟢")
                     self.lbl_conn_status.setStyleSheet("color: #2ecc71; font-weight: bold;")
                     self.sync_config_from_server()
-                    QMessageBox.information(
-                        self, "Успех", 
-                        f"Успешное соединение с сервером ASS!\n\n"
-                        f"Версия API: {r.json().get('version', 'Неизвестно')}\n"
-                        f"Статус паузы очереди: {'Приостановлена' if r.json().get('is_paused') else 'Активна'}"
-                    )
+                    if not silent:
+                        QMessageBox.information(
+                            self, "Успех", 
+                            f"Успешное соединение с сервером ASS!\n\n"
+                            f"Версия API: {r.json().get('version', 'Неизвестно')}\n"
+                            f"Статус паузы очереди: {'Приостановлена' if r.json().get('is_paused') else 'Активна'}"
+                        )
                 else:
                     self.lbl_conn_status.setText("Статус: ошибка API 🔴")
                     self.lbl_conn_status.setStyleSheet("color: #e74c3c; font-weight: bold;")
-                    QMessageBox.warning(self, "Ошибка соединения", f"Сервер ответил кодом {r.status_code}.")
+                    if not silent:
+                        QMessageBox.warning(self, "Ошибка соединения", f"Сервер ответил кодом {r.status_code}.")
             except Exception as e:
                 self.lbl_conn_status.setText("Статус: нет связи 🔴")
                 self.lbl_conn_status.setStyleSheet("color: #e74c3c; font-weight: bold;")
-                QMessageBox.critical(self, "Сбой подключения", f"Не удалось связаться с сервером:\n{e}")
+                if not silent:
+                    QMessageBox.critical(self, "Сбой подключения", f"Не удалось связаться с сервером:\n{e}")
 
         def on_server_url_changed(self, text: str):
             """Моментально сохраняет IP-адрес сервера в client_settings.ini при любом изменении пользователем."""
@@ -3478,25 +3562,60 @@ if PYQT_AVAILABLE:
                 self.settings.setValue("temp_dir", folder)
                 self.settings.sync()
 
+        def start_auto_discovery(self, silent: bool = False):
+            """Запускает асинхронный поиск серверов ASS в локальной сети."""
+            if hasattr(self, '_discovery_worker') and self._discovery_worker and self._discovery_worker.isRunning():
+                return
+            if not silent:
+                self.lbl_conn_status.setText("Поиск сервера в сети... 🔍")
+                self.lbl_conn_status.setStyleSheet("color: #f1c40f; font-weight: bold;")
+            
+            try:
+                from src.network.discovery import DiscoveryWorker
+                self._discovery_worker = DiscoveryWorker(timeout=2.0)
+                self._discovery_worker.servers_found.connect(lambda s: self._on_auto_discovery_complete(s, silent=silent))
+                self._discovery_worker.start()
+            except Exception as e:
+                logger.error(f"Не удалось запустить DiscoveryWorker: {e}")
+
+        def _on_auto_discovery_complete(self, servers: list, silent: bool = False):
+            """Обработка обнаруженных серверов ASS."""
+            if servers:
+                s = servers[0]
+                url = s.get("server_url", "")
+                name = s.get("server_name", "ASS Server")
+                if url:
+                    logger.info(f"Auto-Discovery: обнаружен сервер ASS {name} ({url}).")
+                    self.server_url_edit.setText(url)
+                    self.settings.setValue("server_url", url)
+                    self.settings.sync()
+                    self.append_log(f"[INFO] Автоматически обнаружен сервер ASS в сети: {url} ({name})", "#2ecc71")
+                    self.test_server_connection(silent=True)
+                    if not silent:
+                        QMessageBox.information(
+                            self, "Сервер найден 🌐",
+                            f"В локальной сети обнаружен сервер ASS:\n{name}\nАдрес: {url}\n\nНастройки сохранены!"
+                        )
+            else:
+                if not silent:
+                    self.lbl_conn_status.setText("Серверы не найдены ⚪")
+                    self.lbl_conn_status.setStyleSheet("color: #e74c3c;")
+                    QMessageBox.warning(
+                        self, "Поиск серверов", 
+                        "Серверы ASS в локальной сети не обнаружены.\nПроверьте, что сервер запущен и сетевое подключение активно."
+                    )
+
         def on_status_indicator_clicked(self, event):
             """Быстрый диалог изменения IP сервера по клику на индикатор статуса в заголовке."""
             current_url = self.get_server_url() or "http://127.0.0.1:8000"
-            from PyQt6.QtWidgets import QInputDialog, QLineEdit
-            new_val, ok = QInputDialog.getText(
-                self,
-                "Адрес сервера ASS 🌐",
-                "Введите сетевой адрес сервера ASS (например, http://192.168.1.100:8000):",
-                QLineEdit.EchoMode.Normal,
-                current_url
-            )
-            if ok and new_val.strip():
-                clean_val = new_val.strip().rstrip('/')
-                if not clean_val.startswith("http://") and not clean_val.startswith("https://"):
-                    clean_val = f"http://{clean_val}"
-                self.server_url_edit.setText(clean_val)
-                self.settings.setValue("server_url", clean_val)
-                self.settings.sync()
-                self.test_server_connection()
+            dlg = ServerAddressDialog(self, current_url)
+            if dlg.exec():
+                new_val = dlg.get_url()
+                if new_val:
+                    self.server_url_edit.setText(new_val)
+                    self.settings.setValue("server_url", new_val)
+                    self.settings.sync()
+                    self.test_server_connection(silent=False)
 
         def select_input_dir(self):
             dir_path = QFileDialog.getExistingDirectory(self, "Выберите папку с КТ-снимками DICOM")
@@ -6223,6 +6342,11 @@ if PYQT_AVAILABLE:
             self.lbl_server_status_indicator.setText("Сервер: ❌")
             self.lbl_server_status_indicator.setStyleSheet("font-weight: bold; color: #ff6b6b; margin-right: 10px; margin-bottom: 7px; font-size: 12px;")
             self.update_run_button(bool(self.series_table.selectedItems()))
+
+            # Автопоиск сервера в локальной сети при первой потере связи (если указан localhost или недоступен)
+            if self.failed_status_checks == 2 and not getattr(self, "_auto_discovery_attempted", False):
+                self._auto_discovery_attempted = True
+                self.start_auto_discovery(silent=True)
 
         def show_queue_context_menu(self, pos):
             """Отображает контекстное меню для управления задачами в очереди."""

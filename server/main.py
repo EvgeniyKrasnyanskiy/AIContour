@@ -53,8 +53,13 @@ from server.server_api import app
 if __name__ == "__main__":
     host = "0.0.0.0"
     port = 8000
-    
-    pass
+    from src.network.discovery import DiscoveryServer
+    discovery_srv = DiscoveryServer(http_port=port, role="master")
+    discovery_srv.start()
 
     print(f"Запуск веб-сервера ASS на http://{host}:{port}...")
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    try:
+        uvicorn.run(app, host=host, port=port, log_level="warning")
+    finally:
+        discovery_srv.stop()
+
