@@ -102,8 +102,11 @@ class DicomReceiver(QObject):
                 sop_instance_uid = getattr(ds, 'SOPInstanceUID', 'file')
                 file_path = study_path / f"{sop_instance_uid}.dcm"
 
-                # Сохраняем файл на диск
-                ds.save_as(str(file_path), write_like_original=False)
+                # Сохраняем файл на диск с поддержкой современного API pydicom
+                try:
+                    ds.save_as(str(file_path), enforce_file_format=True)
+                except TypeError:
+                    ds.save_as(str(file_path), write_like_original=False)
                 
                 self.received_files.append(str(file_path))
                 self.file_received.emit(f"Принят файл DICOM: {patient_name} (ID: {patient_id}) -> {sop_instance_uid[:12]}...")
