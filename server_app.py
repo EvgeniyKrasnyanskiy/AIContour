@@ -4284,25 +4284,16 @@ echo   Adding ASS Worker [{w_name}] to Windows Startup
 echo ======================================================================
 echo.
 
-set "TARGET_BAT=%~dp0run_worker_no_console.bat"
-set "WORKING_DIR=%~dp0"
-set "VBS_SCRIPT=%TEMP%\\create_worker_lnk_%RANDOM%.vbs"
+reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "ASS_Compute_Worker_{w_name.replace(' ', '_')}" /t REG_SZ /d "\\"%%~dp0run_worker_no_console.bat\\"" /f >nul
+if %errorlevel% equ 0 (
+    echo [OK] Successfully registered in Windows Startup HKCU Run
+    echo Target: %~dp0run_worker_no_console.bat
+    echo.
+    echo The worker will now launch automatically in background on Windows boot.
+) else (
+    echo [ERROR] Failed to add to Windows Startup registry.
+)
 
-echo Set oWS = WScript.CreateObject("WScript.Shell") > "%VBS_SCRIPT%"
-echo sStartup = oWS.SpecialFolders("Startup") >> "%VBS_SCRIPT%"
-echo sLinkFile = sStartup ^& "\\ASS_Compute_Worker_{w_name.replace(' ', '_')}.lnk" >> "%VBS_SCRIPT%"
-echo Set oLink = oWS.CreateShortcut(sLinkFile) >> "%VBS_SCRIPT%"
-echo oLink.TargetPath = "%TARGET_BAT%" >> "%VBS_SCRIPT%"
-echo oLink.WorkingDirectory = "%WORKING_DIR%" >> "%VBS_SCRIPT%"
-echo oLink.Description = "ASS Auto Segmentation Compute Worker [{w_name}]" >> "%VBS_SCRIPT%"
-echo oLink.Save >> "%VBS_SCRIPT%"
-echo WScript.Echo "[OK] Startup shortcut successfully created: " ^& sLinkFile >> "%VBS_SCRIPT%"
-
-cscript //nologo "%VBS_SCRIPT%"
-if exist "%VBS_SCRIPT%" del "%VBS_SCRIPT%"
-
-echo.
-echo The worker will now launch automatically in background on Windows boot.
 echo.
 pause
 """
@@ -4315,21 +4306,12 @@ echo   Removing ASS Worker [{w_name}] from Windows Startup
 echo ======================================================================
 echo.
 
-set "VBS_SCRIPT=%TEMP%\\remove_worker_lnk_%RANDOM%.vbs"
-
-echo Set oWS = WScript.CreateObject("WScript.Shell") > "%VBS_SCRIPT%"
-echo Set oFSO = WScript.CreateObject("Scripting.FileSystemObject") >> "%VBS_SCRIPT%"
-echo sStartup = oWS.SpecialFolders("Startup") >> "%VBS_SCRIPT%"
-echo sLinkFile = sStartup ^& "\\ASS_Compute_Worker_{w_name.replace(' ', '_')}.lnk" >> "%VBS_SCRIPT%"
-echo If oFSO.FileExists(sLinkFile) Then >> "%VBS_SCRIPT%"
-echo     oFSO.DeleteFile(sLinkFile) >> "%VBS_SCRIPT%"
-echo     WScript.Echo "[OK] Removed startup shortcut: " ^& sLinkFile >> "%VBS_SCRIPT%"
-echo Else >> "%VBS_SCRIPT%"
-echo     WScript.Echo "[INFO] Shortcut not found: " ^& sLinkFile >> "%VBS_SCRIPT%"
-echo End If >> "%VBS_SCRIPT%"
-
-cscript //nologo "%VBS_SCRIPT%"
-if exist "%VBS_SCRIPT%" del "%VBS_SCRIPT%"
+reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "ASS_Compute_Worker_{w_name.replace(' ', '_')}" /f >nul 2>&1
+if %errorlevel% equ 0 (
+    echo [OK] Successfully removed from Windows Startup HKCU Run.
+) else (
+    echo [INFO] Startup registry entry was not found or already removed.
+)
 
 echo.
 pause
