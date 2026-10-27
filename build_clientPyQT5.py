@@ -322,9 +322,10 @@ def main():
         
         has_icon = generate_ico_icon()
         build_executable(has_icon)
-        package_portable_zip()
+        # Упаковка в ZIP отключена: в dist создается только автономный ASS_Client.exe
+        # package_portable_zip()
         
-        print_banner("СБОРКА УСПЕШНО ВЫПОЛНЕНА! ДИСТРИБУТИВ В ПАПКЕ dist/")
+        print_banner("СБОРКА УСПЕШНО ВЫПОЛНЕНА! ИСПОЛНЯЕМЫЙ ФАЙЛ В ПАПКЕ dist/")
         
     except Exception as e:
         print(f"\n[FATAL ERROR] Произошел критический сбой при сборке: {e}")
