@@ -1842,6 +1842,9 @@ if PYQT_AVAILABLE:
                     self.append_log(msg, col)
                 del self._startup_log_buffer
 
+            if self.splash:
+                self.splash.set_progress(90, "Загрузка конфигурации и настроек сервера...")
+
             self.load_settings()
 
             # Таймер для обновления состояния сервера и очереди задач
@@ -3179,7 +3182,9 @@ if PYQT_AVAILABLE:
                     pol = self.settings.value("dispatch_policy", "offload_workers")
                     idx = self.combo_cluster_policy.findData(pol)
                     if idx >= 0:
+                        self.combo_cluster_policy.blockSignals(True)
                         self.combo_cluster_policy.setCurrentIndex(idx)
+                        self.combo_cluster_policy.blockSignals(False)
 
                 clean_blobs = self.settings.value("clean_blobs", True, type=bool)
                 self.clean_blobs_check.setChecked(clean_blobs)
@@ -3250,7 +3255,7 @@ if PYQT_AVAILABLE:
                 
                 input_dir = self.settings.value("input_dir", "")
                 if input_dir and os.path.isdir(input_dir):
-                    self.start_dicom_scan(input_dir, is_manual=True)
+                    self.start_dicom_scan(input_dir, is_manual=False)
                     self.scan_timer.start()
                 self.update_checked_organs_count()
 
@@ -3261,7 +3266,6 @@ if PYQT_AVAILABLE:
             self.settings.setValue("client_name", self.client_name_edit.text().strip())
             if hasattr(self, "temp_dir_edit"):
                 self.settings.setValue("temp_dir", self.temp_dir_edit.text().strip())
-            self.settings.sync()
             if hasattr(self, "last_alternative_output_dir") and self.last_alternative_output_dir:
                 self.settings.setValue("alternative_output_dir", self.last_alternative_output_dir)
             current_preset = self.preset_combo.currentText()
@@ -3278,6 +3282,10 @@ if PYQT_AVAILABLE:
             self.settings.setValue("use_gpu", "true" if self.radio_gpu.isChecked() else "false")
             if hasattr(self, "gpu_combo"):
                 self.settings.setValue("selected_gpu", self.gpu_combo.currentIndex())
+            if hasattr(self, "combo_cluster_policy"):
+                pol = self.combo_cluster_policy.currentData()
+                if pol:
+                    self.settings.setValue("dispatch_policy", pol)
             
             checked_organs = []
             for i in range(self.organs_list.count()):
@@ -3289,6 +3297,7 @@ if PYQT_AVAILABLE:
                     if organ_name not in checked_organs:
                         checked_organs.append(organ_name)
             self.settings.setValue("checked_organs", checked_organs)
+            self.settings.sync()
 
         def test_server_connection(self):
             """Проверяет подключение к указанному FastAPI серверу."""
@@ -6257,6 +6266,14 @@ ID воркера     : {w_id}
             self.combo_cluster_policy.addItem("Приоритет воркеров (Рекомендуется для 16 GB CPU)", "offload_workers")
             self.combo_cluster_policy.addItem("Выделенный координатор (Мастер только диспетчер)", "dedicated_coordinator")
             self.combo_cluster_policy.addItem("Первый свободный узел", "first_available")
+            
+            # Восстанавливаем сохранённое значение при создании виджета
+            saved_pol = self.settings.value("dispatch_policy", "offload_workers")
+            idx = self.combo_cluster_policy.findData(saved_pol)
+            if idx >= 0:
+                self.combo_cluster_policy.blockSignals(True)
+                self.combo_cluster_policy.setCurrentIndex(idx)
+                self.combo_cluster_policy.blockSignals(False)
             self.combo_cluster_policy.currentIndexChanged.connect(self.on_cluster_policy_changed)
             
             policy_layout.addWidget(lbl_pol)
@@ -6306,26 +6323,71 @@ ID воркера     : {w_id}
             if not policy:
                 return
             try:
-                from server.server_api import queue_manager
-                if hasattr(queue_manager, 'cluster_mgr'):
-                    queue_manager.cluster_mgr.dispatch_policy = policy
+                # 1. Сохраняем в QSettings локально
                 self.settings.setValue("dispatch_policy", policy)
                 self.settings.sync()
-                logger.info(f"Политика диспетчера кластера изменена: {policy}")
+                logger.info(f"Политика диспетчера кластера сохранена в INI: {policy}")
+                
+                # 2. Асинхронно синхронизируем с работающим процессом FastAPI бэкенда
+                def sync_to_backend():
+                    import requests
+                    try:
+                        server_url = self.get_server_url()
+                        r = requests.post(f"{server_url}/api/cluster/policy", json={"policy": policy}, timeout=2.0)
+                        if r.status_code == 200:
+                            logger.info(f"Политика кластера успешно обновлена на сервере: {policy}")
+                    except Exception as ex:
+                        logger.debug(f"Фоновая синхронизация политики кластера: {ex}")
+                import threading
+                threading.Thread(target=sync_to_backend, daemon=True).start()
             except Exception as e:
                 logger.error(f"Не удалось изменить политику кластера: {e}")
 
         def update_cluster_ui(self):
-            """Обновляет таблицу узлов кластера из данных cluster_mgr."""
+            """Обновляет таблицу узлов кластера из данных сервера через REST API."""
+            def fetch_status():
+                import requests
+                data = None
+                try:
+                    server_url = self.get_server_url()
+                    r = requests.get(f"{server_url}/api/cluster/status", timeout=1.5)
+                    if r.status_code == 200:
+                        data = r.json()
+                except Exception as ex:
+                    logger.debug(f"Фоновое получение статуса кластера через REST: {ex}")
+
+                # Локальный fallback если сервер ещё стартует
+                if not data:
+                    try:
+                        from server.server_api import queue_manager
+                        if hasattr(queue_manager, 'cluster_mgr'):
+                            data = queue_manager.cluster_mgr.get_cluster_status()
+                    except Exception:
+                        pass
+
+                if data:
+                    QTimer.singleShot(0, lambda: self._apply_cluster_status_ui(data))
+
+            import threading
+            threading.Thread(target=fetch_status, daemon=True).start()
+
+        def _apply_cluster_status_ui(self, status_data: dict):
             try:
-                from server.server_api import queue_manager
-                if not hasattr(queue_manager, 'cluster_mgr'):
-                    return
-                status_data = queue_manager.cluster_mgr.get_cluster_status()
                 total = status_data.get("total_nodes", 0)
                 online = status_data.get("online_nodes", 0)
                 total_ram = status_data.get("total_cluster_ram_gb", 0.0)
                 self.lbl_cluster_summary.setText(f"Узлов: {total} | В сети: {online} | Память кластера: {total_ram:.1f} GB")
+
+                # Синхронизируем комбобокс политики, если сервер вернул установленную политику
+                server_policy = status_data.get("dispatch_policy")
+                if server_policy and hasattr(self, "combo_cluster_policy"):
+                    curr_policy = self.combo_cluster_policy.currentData()
+                    if curr_policy != server_policy:
+                        idx = self.combo_cluster_policy.findData(server_policy)
+                        if idx >= 0:
+                            self.combo_cluster_policy.blockSignals(True)
+                            self.combo_cluster_policy.setCurrentIndex(idx)
+                            self.combo_cluster_policy.blockSignals(False)
 
                 workers = status_data.get("workers", [])
                 self.table_cluster.setRowCount(len(workers))

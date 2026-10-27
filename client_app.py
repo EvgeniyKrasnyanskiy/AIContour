@@ -1775,6 +1775,9 @@ if PYQT_AVAILABLE:
                 self.splash.set_progress(85, "Загрузка настроек клиента...")
 
             self.load_settings()
+
+            if self.splash:
+                self.splash.set_progress(95, "Синхронизация конфигурации с сервером...")
             self.sync_config_from_server()
 
         def init_ui(self):
@@ -3373,7 +3376,7 @@ if PYQT_AVAILABLE:
                 
                 input_dir = self.settings.value("input_dir", "")
                 if input_dir and os.path.isdir(input_dir):
-                    self.start_dicom_scan(input_dir, is_manual=True)
+                    self.start_dicom_scan(input_dir, is_manual=False)
                     self.scan_timer.start()
                 self.update_checked_organs_count()
 

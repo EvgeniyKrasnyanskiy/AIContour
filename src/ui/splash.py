@@ -17,12 +17,12 @@ def create_splash_screen(app, is_server: bool = False):
     """
     try:
         from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QProgressBar
-        from PyQt6.QtCore import Qt
+        from PyQt6.QtCore import Qt, QTimer
         from PyQt6.QtGui import QPixmap, QFont
         is_pyqt6 = True
     except ImportError:
         from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QProgressBar
-        from PyQt5.QtCore import Qt
+        from PyQt5.QtCore import Qt, QTimer
         from PyQt5.QtGui import QPixmap, QFont
         is_pyqt6 = False
 
@@ -119,9 +119,13 @@ def create_splash_screen(app, is_server: bool = False):
             app.processEvents()
 
         def finish(self, main_window):
-            """Закрывает сплэш-скрин и отображает главное окно."""
+            """Отображает главное окно, ждет отрисовки и плавно закрывает сплэш-скрин."""
             main_window.showMaximized()
-            self.close()
+            main_window.raise_()
+            main_window.activateWindow()
+            app.processEvents()
+            # Даем окну полностью завершить рендеринг виджетов перед скрытием заставки
+            QTimer.singleShot(450, self.close)
 
     splash = ModernSplashScreen()
     splash.show()
