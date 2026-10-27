@@ -743,6 +743,24 @@ def set_cluster_policy(payload: ClusterPolicyPayload):
     return {"status": "success", "policy": payload.policy}
 
 
+class WorkerTogglePayload(BaseModel):
+    worker_id: str
+    enabled: bool
+
+
+@app.post("/api/cluster/worker/toggle")
+def toggle_cluster_worker(payload: WorkerTogglePayload):
+    """
+    Включение или исключение воркера из распределения задач.
+    """
+    if not hasattr(queue_manager, "cluster_mgr") or not queue_manager.cluster_mgr:
+        raise HTTPException(status_code=500, detail="ClusterManager не инициализирован.")
+    success = queue_manager.cluster_mgr.set_worker_enabled(payload.worker_id, payload.enabled)
+    if not success:
+        raise HTTPException(status_code=404, detail="Воркер не найден в пуле кластера.")
+    return {"status": "ok", "worker_id": payload.worker_id, "enabled": payload.enabled}
+
+
 # ================================================================================
 # Эндпоинты выполнения задач на Воркерах (Worker Node API)
 # ================================================================================

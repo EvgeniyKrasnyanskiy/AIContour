@@ -269,6 +269,10 @@ if PYQT_AVAILABLE:
         """Вспомогательный класс сигналов для потокобезопасного обновления UI сервера."""
         status_signal = pyqtSignal(bool, dict, list)
 
+    class ClusterStatusSignaler(QObject):
+        """Вспомогательный класс сигналов для потокобезопасного обновления таблицы кластера."""
+        status_signal = pyqtSignal(dict)
+
     class StreamToSignaler:
         """Перенаправляет текстовые потоки в сигналы PyQt6."""
         def __init__(self, signaler: LogSignaler, level: str = "INFO"):
@@ -2281,6 +2285,9 @@ if PYQT_AVAILABLE:
             self.server_status_signaler = ServerStatusSignaler()
             self.server_status_signaler.status_signal.connect(self.handle_server_status_update)
 
+            self.cluster_signaler = ClusterStatusSignaler()
+            self.cluster_signaler.status_signal.connect(self._apply_cluster_status_ui)
+
             # Таймер активности (спиннер + пульсация цвета)
             self.activity_timer = QTimer(self)
             self.activity_timer.setInterval(120)
@@ -4176,6 +4183,67 @@ ID воркера     : {w_id}
    со статусом «Свободен» (зеленый индикатор) и начнет параллельно обрабатывать КТ.
 ================================================================================
 """
+                run_no_console_text = f"""@echo off
+set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
+cd /d "%~dp0"
+
+if exist "%~dp0totalseg_home\\nnunet" (
+    set "TOTALSEG_HOME_DIR=%~dp0totalseg_home"
+    set "TOTALSEG_WEIGHTS_PATH=%~dp0totalseg_home\\nnunet\\results"
+)
+
+if exist "%~dp0venv\\pythonw.exe" (
+    start "" "%~dp0venv\\pythonw.exe" server\\main.py
+    exit /b 0
+)
+
+if exist "%~dp0venv\\Scripts\\pythonw.exe" (
+    start "" "%~dp0venv\\Scripts\\pythonw.exe" server\\main.py
+    exit /b 0
+)
+
+start "" pythonw server\\main.py
+exit /b 0
+"""
+                add_startup_text = f"""@echo off
+set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
+chcp 65001 > nul
+cd /d "%~dp0"
+echo ======================================================================
+echo   Добавление ASS Worker [{w_name}] в автозагрузку Windows
+echo ======================================================================
+echo.
+set "VBS_SCRIPT=%TEMP%\\create_worker_lnk_%RANDOM%.vbs"
+set "STARTUP_DIR=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
+echo Set oWS = WScript.CreateObject("WScript.Shell") > "%VBS_SCRIPT%"
+echo sLinkFile = "%STARTUP_DIR%\\ASS_Compute_Worker_{w_name.replace(' ', '_')}.lnk" >> "%VBS_SCRIPT%"
+echo Set oLink = oWS.CreateShortcut(sLinkFile) >> "%VBS_SCRIPT%"
+echo oLink.TargetPath = "%~dp0run_worker_no_console.bat" >> "%VBS_SCRIPT%"
+echo oLink.WorkingDirectory = "%~dp0" >> "%VBS_SCRIPT%"
+echo oLink.Description = "ASS Auto Segmentation Compute Worker [{w_name}]" >> "%VBS_SCRIPT%"
+echo oLink.Save >> "%VBS_SCRIPT%"
+cscript //nologo "%VBS_SCRIPT%"
+if exist "%VBS_SCRIPT%" del "%VBS_SCRIPT%"
+echo [OK] Ярлык скрытого запуска успешно добавлен в автозагрузку!
+echo Расположение: %STARTUP_DIR%\\ASS_Compute_Worker_{w_name.replace(' ', '_')}.lnk
+echo.
+echo Воркер будет автоматически запускаться в фоне без консольного окна.
+echo.
+pause
+"""
+                remove_startup_text = f"""@echo off
+set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
+chcp 65001 > nul
+set "STARTUP_DIR=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
+if exist "%STARTUP_DIR%\\ASS_Compute_Worker_{w_name.replace(' ', '_')}.lnk" (
+    del "%STARTUP_DIR%\\ASS_Compute_Worker_{w_name.replace(' ', '_')}.lnk"
+    echo [OK] Ярлык воркера удален из автозагрузки Windows.
+) else (
+    echo [INFO] Ярлык автозагрузки не обнаружен.
+)
+echo.
+pause
+"""
                 entries = []
 
                 # 1. Серверный бэкенд
@@ -4195,6 +4263,9 @@ ID воркера     : {w_id}
                 # 4. Файлы запуска и настройки воркера
                 entries.append(("data", ini_text.encode("utf-8"), "config/server_settings.ini"))
                 entries.append(("data", run_bat_text.encode("utf-8"), "run_worker.bat"))
+                entries.append(("data", run_no_console_text.encode("utf-8"), "run_worker_no_console.bat"))
+                entries.append(("data", add_startup_text.encode("utf-8"), "add_to_startup.bat"))
+                entries.append(("data", remove_startup_text.encode("utf-8"), "remove_from_startup.bat"))
                 entries.append(("data", setup_bat_text.encode("utf-8"), "setup_worker.bat"))
                 entries.append(("data", readme_text.encode("utf-8"), "README_WORKER.txt"))
 
@@ -6814,9 +6885,9 @@ ID воркера     : {w_id}
 
             # Таблица узлов кластера
             self.table_cluster = QTableWidget()
-            self.table_cluster.setColumnCount(7)
+            self.table_cluster.setColumnCount(8)
             self.table_cluster.setHorizontalHeaderLabels([
-                "Узел (Имя)", "Сетевой адрес", "Устройство", "Статус", "Пациент / Задача", "ОЗУ (Исп/Всего)", "Связь"
+                "Узел (Имя)", "Сетевой адрес", "Устройство", "Статус", "Пациент / Задача", "ОЗУ (Исп/Всего)", "Связь", "Управление"
             ])
             self.table_cluster.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
             self.table_cluster.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
@@ -6825,6 +6896,7 @@ ID воркера     : {w_id}
             self.table_cluster.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
             self.table_cluster.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
             self.table_cluster.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+            self.table_cluster.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
             self.table_cluster.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             self.table_cluster.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             layout.addWidget(self.table_cluster, 1)
@@ -6887,11 +6959,30 @@ ID воркера     : {w_id}
                     except Exception:
                         pass
 
-                if data:
-                    QTimer.singleShot(0, lambda: self._apply_cluster_status_ui(data))
+                if data and hasattr(self, 'cluster_signaler'):
+                    self.cluster_signaler.status_signal.emit(data)
 
             import threading
             threading.Thread(target=fetch_status, daemon=True).start()
+
+        def toggle_remote_worker(self, worker_id: str, enabled: bool):
+            """Отправляет на сервер запрос на включение/выключение воркера в пуле кластера."""
+            def worker():
+                import requests
+                try:
+                    server_url = self.get_server_url()
+                    r = requests.post(
+                        f"{server_url}/api/cluster/worker/toggle",
+                        json={"worker_id": worker_id, "enabled": enabled},
+                        timeout=2.0
+                    )
+                    if r.status_code == 200:
+                        logger.info(f"Статус воркера '{worker_id}' изменен на: enabled={enabled}")
+                        self.update_cluster_ui()
+                except Exception as e:
+                    logger.error(f"Не удалось изменить активность воркера '{worker_id}': {e}")
+            import threading
+            threading.Thread(target=worker, daemon=True).start()
 
         def _apply_cluster_status_ui(self, status_data: dict):
             try:
@@ -6931,8 +7022,12 @@ ID воркера     : {w_id}
 
                     # 3. Статус
                     st = w.get("status", "IDLE")
+                    is_enabled = w.get("is_enabled", True)
                     st_item = self.create_table_item(st, centered=True)
-                    if st == "IDLE":
+                    if not is_enabled or st == "DISABLED":
+                        st_item.setText("⏸️ Отключен")
+                        st_item.setForeground(QBrush(QColor("#f39c12")))
+                    elif st == "IDLE":
                         st_item.setText("🟢 Свободен")
                         st_item.setForeground(QBrush(QColor("#2ecc71")))
                     elif st == "PROCESSING":
@@ -6956,6 +7051,50 @@ ID воркера     : {w_id}
                     sec = w.get("seconds_since_heartbeat", 0)
                     ping_txt = "Локально" if w.get('is_local') else (f"{int(sec)}с назад" if sec < 60 else "Таймаут")
                     self.table_cluster.setItem(row, 6, self.create_table_item(ping_txt, centered=True))
+
+                    # 7. Управление (Включение / Отключение)
+                    if w.get('is_local'):
+                        lbl_local = QLabel("Главный узел")
+                        lbl_local.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                        lbl_local.setStyleSheet("color: #7f8c8d; font-size: 11px;")
+                        self.table_cluster.setCellWidget(row, 7, lbl_local)
+                    else:
+                        btn_toggle = QPushButton("⏸️ Отключить" if is_enabled else "▶️ Включить")
+                        btn_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+                        if is_enabled:
+                            btn_toggle.setStyleSheet("""
+                                QPushButton {
+                                    background-color: #d35400;
+                                    border: 1px solid #e67e22;
+                                    color: #ffffff;
+                                    padding: 3px 10px;
+                                    border-radius: 4px;
+                                    font-size: 11px;
+                                    font-weight: bold;
+                                }
+                                QPushButton:hover {
+                                    background-color: #e67e22;
+                                }
+                            """)
+                        else:
+                            btn_toggle.setStyleSheet("""
+                                QPushButton {
+                                    background-color: #27ae60;
+                                    border: 1px solid #2ecc71;
+                                    color: #ffffff;
+                                    padding: 3px 10px;
+                                    border-radius: 4px;
+                                    font-size: 11px;
+                                    font-weight: bold;
+                                }
+                                QPushButton:hover {
+                                    background-color: #2ecc71;
+                                }
+                            """)
+                        worker_id = w["worker_id"]
+                        target_state = not is_enabled
+                        btn_toggle.clicked.connect(lambda checked=False, wid=worker_id, target=target_state: self.toggle_remote_worker(wid, target))
+                        self.table_cluster.setCellWidget(row, 7, btn_toggle)
             except Exception as e:
                 logger.error(f"Ошибка при обновлении таблицы кластера: {e}")
 
@@ -7572,7 +7711,7 @@ ID воркера     : {w_id}
                     """)
                     
                 self.lbl_server_address.setText(f"API запущен: http://{self.get_local_ip()}:8000")
-                if hasattr(self, 'table_cluster'):
+                if hasattr(self, 'table_cluster') and hasattr(self, 'tab_widget') and self.tab_widget.currentWidget() == getattr(self, 'tab_cluster_widget', None):
                     self.update_cluster_ui()
                 
                 # Обновление таблицы очереди

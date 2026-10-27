@@ -38,6 +38,7 @@ class WorkerNode:
         self.port = port
         self.device = device
         self.is_local = is_local
+        self.is_enabled = True
         
         self.status = "IDLE"  # IDLE, PROCESSING, OFFLINE, DISABLED
         self.current_job_id: Optional[str] = None
@@ -78,6 +79,7 @@ class WorkerNode:
             "cpu_percent": round(self.cpu_percent, 1),
             "last_heartbeat": round(self.last_heartbeat, 1),
             "seconds_since_heartbeat": round(time.time() - self.last_heartbeat, 1),
+            "is_enabled": self.is_enabled,
             "jobs_completed": self.jobs_completed,
             "jobs_failed": self.jobs_failed
         }
@@ -206,12 +208,15 @@ class ClusterManager:
                 return False
                 
             node.last_heartbeat = time.time()
-            if node.status == "OFFLINE":
-                node.status = "IDLE"
-                logger.info(f"Связь с воркером '{node.name}' восстановлена.")
-                
-            if "status" in data and node.status != "OFFLINE":
-                node.status = data["status"]
+            if not getattr(node, "is_enabled", True):
+                node.status = "DISABLED"
+            else:
+                if node.status == "OFFLINE":
+                    node.status = "IDLE"
+                    logger.info(f"Связь с воркером '{node.name}' восстановлена.")
+                    
+                if "status" in data and node.status != "OFFLINE":
+                    node.status = data["status"]
             if "current_job_id" in data:
                 node.current_job_id = data["current_job_id"]
             if "current_patient" in data:
@@ -237,6 +242,23 @@ class ClusterManager:
                 return True
             return False
 
+    def set_worker_enabled(self, worker_id: str, enabled: bool) -> bool:
+        """Включение или отключение воркера от распределения задач."""
+        with self.lock:
+            node = self.workers.get(worker_id)
+            if not node:
+                return False
+            node.is_enabled = bool(enabled)
+            if not enabled:
+                if node.status != "PROCESSING":
+                    node.status = "DISABLED"
+                logger.info(f"Воркер '{node.name}' ({worker_id}) отключен от пула задач (DISABLED).")
+            else:
+                if node.status == "DISABLED":
+                    node.status = "IDLE"
+                logger.info(f"Воркер '{node.name}' ({worker_id}) включен в пул задач (ENABLED).")
+            return True
+
     def get_available_worker(self) -> Optional[WorkerNode]:
         """
         Выбирает свободный вычислительный узел в соответствии с текущей политикой распределения.
@@ -244,9 +266,9 @@ class ClusterManager:
         with self.lock:
             remote_idle_workers = [
                 w for w in self.workers.values()
-                if not w.is_local and w.status == "IDLE"
+                if not w.is_local and w.status == "IDLE" and getattr(w, "is_enabled", True)
             ]
-            local_idle = (self.local_worker and self.local_worker.status == "IDLE" and self.enable_local_compute)
+            local_idle = (self.local_worker and self.local_worker.status == "IDLE" and self.enable_local_compute and getattr(self.local_worker, "is_enabled", True))
             
             if self.dispatch_policy == "offload_workers":
                 # Приоритет отдачи удаленным узлам, чтобы мастер был свободен для сети и UI
