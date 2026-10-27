@@ -1809,9 +1809,9 @@ if PYQT_AVAILABLE:
 
     class ZipPackageThread(QThread):
         """Фоновый поток для потокового создания ZIP-пакетов без зависания интерфейса."""
-        progress_signal = pyqtSignal(int, int, int, str, float)  # (percent, processed_bytes, total_bytes, current_file, speed_mb)
+        progress_signal = pyqtSignal(int, 'qint64', 'qint64', str, float)  # (percent, processed_bytes, total_bytes, current_file, speed_mb)
         status_signal = pyqtSignal(str)
-        finished_signal = pyqtSignal(bool, str, int)  # (success, error_msg, final_size_bytes)
+        finished_signal = pyqtSignal(bool, str, 'qint64')  # (success, error_msg, final_size_bytes)
 
         def __init__(self, output_zip_path: Path, entries: list, compresslevel: int = 1, parent=None):
             super().__init__(parent)
@@ -1829,6 +1829,7 @@ if PYQT_AVAILABLE:
 
             self.status_signal.emit("Анализ и подсчет объема файлов для упаковки...")
             file_tasks = []
+            dir_tasks = set()
             total_bytes = 0
 
             try:
@@ -1843,29 +1844,44 @@ if PYQT_AVAILABLE:
                         if isinstance(data_bytes, str):
                             data_bytes = data_bytes.encode("utf-8")
                         total_bytes += len(data_bytes)
-                        file_tasks.append(("data", arcname, data_bytes, len(data_bytes)))
+                        clean_arc = arcname.replace("\\", "/")
+                        parent_arc = "/".join(clean_arc.split("/")[:-1])
+                        if parent_arc:
+                            dir_tasks.add(parent_arc)
+                        file_tasks.append(("data", clean_arc, data_bytes, len(data_bytes)))
                     elif kind == "file":
                         _, src_path, arcname = entry
                         p = Path(src_path)
                         if p.exists() and p.is_file():
                             sz = p.stat().st_size
                             total_bytes += sz
-                            file_tasks.append(("file", arcname, p, sz))
+                            clean_arc = arcname.replace("\\", "/")
+                            parent_arc = "/".join(clean_arc.split("/")[:-1])
+                            if parent_arc:
+                                dir_tasks.add(parent_arc)
+                            file_tasks.append(("file", clean_arc, p, sz))
                     elif kind == "dir":
                         _, dir_path, arc_prefix, excludes = entry
                         p = Path(dir_path)
                         if p.exists() and p.is_dir():
+                            clean_prefix = arc_prefix.replace("\\", "/").rstrip("/")
+                            if clean_prefix:
+                                dir_tasks.add(clean_prefix)
                             for root, dirs, files in os.walk(p):
                                 if self.is_cancelled:
                                     self.finished_signal.emit(False, "Отменено пользователем.", 0)
                                     return
-                                dirs[:] = [d for d in dirs if not any(ex in d for ex in excludes)]
+                                dirs[:] = [d for d in dirs if not any(ex == d or ex in d for ex in excludes)]
+                                for d in dirs:
+                                    rel_d = (Path(root) / d).relative_to(p).as_posix()
+                                    full_d = f"{clean_prefix}/{rel_d}" if clean_prefix else rel_d
+                                    dir_tasks.add(full_d)
                                 for f in files:
                                     if any(f.endswith(ex) or ex in f for ex in excludes):
                                         continue
                                     fp = Path(root) / f
-                                    rel = fp.relative_to(p)
-                                    arcname = f"{arc_prefix}/{rel.as_posix()}" if arc_prefix else rel.as_posix()
+                                    rel = fp.relative_to(p).as_posix()
+                                    arcname = f"{clean_prefix}/{rel}" if clean_prefix else rel
                                     try:
                                         sz = fp.stat().st_size
                                         total_bytes += sz
@@ -1890,6 +1906,22 @@ if PYQT_AVAILABLE:
                     compresslevel=self.compresslevel,
                     allowZip64=True
                 ) as zf:
+                    # 1. Запись записей директорий для предотвращения гонок распаковки
+                    written_dirs = set()
+                    for d_path in sorted(dir_tasks):
+                        if self.is_cancelled:
+                            break
+                        parts = [p for p in d_path.strip("/").split("/") if p]
+                        cur = ""
+                        for part in parts:
+                            cur = f"{cur}{part}/"
+                            if cur not in written_dirs:
+                                z_dir = zipfile.ZipInfo(cur, date_time=time.localtime()[:6])
+                                z_dir.external_attr = 0o755 << 16 | 0x10
+                                zf.writestr(z_dir, b"")
+                                written_dirs.add(cur)
+
+                    # 2. Потоковая запись файлов с сохранением атрибутов Windows
                     for task in file_tasks:
                         if self.is_cancelled:
                             break
@@ -1897,14 +1929,22 @@ if PYQT_AVAILABLE:
                         kind = task[0]
                         if kind == "data":
                             _, arcname, data_bytes, sz = task
-                            zf.writestr(arcname, data_bytes)
+                            zinfo = zipfile.ZipInfo(arcname, date_time=time.localtime()[:6])
+                            zinfo.compress_type = zipfile.ZIP_DEFLATED
+                            zinfo._compresslevel = self.compresslevel
+                            zinfo.external_attr = 0o644 << 16 | 0x20
+                            zf.writestr(zinfo, data_bytes)
                             processed_bytes += sz
                         elif kind == "file":
                             _, arcname, src_file, sz = task
                             chunk_size = 2 * 1024 * 1024  # 2 МБ
                             try:
+                                zinfo = zipfile.ZipInfo.from_file(src_file, arcname)
+                                zinfo.compress_type = zipfile.ZIP_DEFLATED
+                                zinfo._compresslevel = self.compresslevel
+                                zinfo.external_attr |= 0x20  # Атрибут архива Windows
                                 with open(src_file, "rb") as sf:
-                                    with zf.open(arcname, "w", force_zip64=True) as df:
+                                    with zf.open(zinfo, "w") as df:
                                         while True:
                                             if self.is_cancelled:
                                                 break
@@ -1953,6 +1993,7 @@ if PYQT_AVAILABLE:
             self.setWindowTitle(title)
             self.setMinimumSize(620, 260)
             self.resize(640, 280)
+            self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowMinimizeButtonHint)
             self.setStyleSheet("""
                 QDialog { background-color: #2f3542; color: #ffffff; }
                 QLabel { color: #ffffff; font-size: 12px; }
@@ -1991,7 +2032,14 @@ if PYQT_AVAILABLE:
             layout.addStretch()
 
             btn_layout = QHBoxLayout()
+            self.btn_bg = QPushButton("Фоном (свернуть)")
+            self.btn_bg.setStyleSheet("background-color: #3d3d3d; color: #ced6e0; padding: 7px 16px;")
+            self.btn_bg.setToolTip("Свернуть диалог в панель задач, пока архив формируется в фоновом режиме")
+            self.btn_bg.clicked.connect(self.showMinimized)
+            btn_layout.addWidget(self.btn_bg)
+
             btn_layout.addStretch()
+
             self.btn_action = QPushButton("Отмена")
             self.btn_action.clicked.connect(self.on_cancel_or_close)
             btn_layout.addWidget(self.btn_action)
@@ -2019,9 +2067,11 @@ if PYQT_AVAILABLE:
             
             rem_sec_str = ""
             if speed_mb > 0.05 and curr_b < total_b:
-                rem_bytes = total_b - curr_b
+                rem_bytes = max(0, total_b - curr_b)
                 rem_sec = int((rem_bytes / (1024 * 1024)) / speed_mb)
-                if rem_sec > 60:
+                if rem_sec >= 3600:
+                    rem_sec_str = f" • Осталось: ~{rem_sec // 3600} ч {(rem_sec % 3600) // 60} мин"
+                elif rem_sec >= 60:
                     rem_sec_str = f" • Осталось: ~{rem_sec // 60} мин {rem_sec % 60} сек"
                 else:
                     rem_sec_str = f" • Осталось: ~{rem_sec} сек"
@@ -2042,8 +2092,13 @@ if PYQT_AVAILABLE:
             self.is_success = success
             self.error_msg = error_msg
             self.final_size = final_size
+            self.btn_bg.setEnabled(False)
 
             if success:
+                if self.isMinimized():
+                    self.showNormal()
+                self.raise_()
+                self.activateWindow()
                 self.progress_bar.setValue(100)
                 sz_str = f"{final_size / (1024*1024*1024):.2f} ГБ" if final_size > 1024*1024*1024 else f"{final_size / (1024*1024):.1f} МБ"
                 self.lbl_head.setText("<b>✅ Архив успешно сформирован!</b>")
@@ -2054,6 +2109,10 @@ if PYQT_AVAILABLE:
                 self.btn_action.setStyleSheet("background-color: #2ed573; color: white;")
                 self.accept()
             else:
+                if self.isMinimized():
+                    self.showNormal()
+                self.raise_()
+                self.activateWindow()
                 self.lbl_head.setText("<b>❌ Ошибка формирования архива</b>")
                 self.lbl_head.setStyleSheet("font-size: 14px; color: #ff4757;")
                 self.lbl_status.setText(f"Не удалось завершить создание архива:\n{error_msg}")
@@ -2124,9 +2183,9 @@ if PYQT_AVAILABLE:
             lbl_comp_opts.setStyleSheet("color: #00d2d3; font-size: 12px; margin-top: 6px;")
             layout.addWidget(lbl_comp_opts)
 
-            self.chk_include_venv = QCheckBox("Включить автономное окружение Python + PyTorch (venv, ~5.7 ГБ)")
+            self.chk_include_venv = QCheckBox("Включить автономный Portable Python + PyTorch (~4-5 ГБ)")
             self.chk_include_venv.setChecked(True)
-            self.chk_include_venv.setToolTip("Рекомендуется для ПК без доступа в интернет. Воркер запустится сразу без установки Python.")
+            self.chk_include_venv.setToolTip("Полностью автономный дистрибутив. Установка Python на целевой ПК НЕ требуется — запуск в 1 клик.")
             layout.addWidget(self.chk_include_venv)
 
             self.chk_include_models = QCheckBox("Включить веса нейросетей TotalSegmentator (~1.3 ГБ)")
@@ -3884,8 +3943,11 @@ elekta_monaco_aet=MONACO
 elekta_monaco_port=104
 """
                 bat_content = """@echo off
+set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
 chcp 65001 > nul
-start "" "ASS_Client.exe"
+cd /d "%~dp0"
+start "" "%~dp0ASS_Client.exe"
+exit
 """
                 entries = [
                     ("file", client_binary, "ASS_Client.exe"),
@@ -3994,6 +4056,7 @@ master_url={m_url}
 temp_dir=
 """
                 run_bat_text = f"""@echo off
+set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
 chcp 65001 > nul
 title ASS - Compute Worker [{w_name}]
 cd /d "%~dp0"
@@ -4011,19 +4074,23 @@ if exist "%~dp0totalseg_home\\nnunet" (
     echo [INFO] Offline TotalSegmentator AI weights activated: %~dp0totalseg_home
 )
 
-echo [1/2] Activating Python virtual environment...
-if not exist "venv\\Scripts\\python.exe" (
-    echo [ERROR] Virtual environment 'venv' not found in %~dp0
-    echo Please make sure the venv folder was unpacked from the archive.
-    pause
-    exit /b 1
+if exist "%~dp0venv\\python.exe" (
+    echo [INFO] Launching ASS Worker via bundled portable Python...
+    "%~dp0venv\\python.exe" server\\main.py
+    goto :worker_exit
 )
 
-call venv\\Scripts\\activate.bat
+if exist "%~dp0venv\\Scripts\\python.exe" (
+    echo [INFO] Launching ASS Worker via virtual environment...
+    call "%~dp0venv\\Scripts\\activate.bat"
+    python server\\main.py
+    goto :worker_exit
+)
 
-echo [2/2] Starting ASS Worker Service...
-venv\\Scripts\\python.exe server\\main.py
+echo [1/2] Activating system Python...
+python server\\main.py
 
+:worker_exit
 if %errorlevel% neq 0 (
     echo.
     echo [WARNING] Worker exited with code %errorlevel%
@@ -4031,6 +4098,7 @@ if %errorlevel% neq 0 (
 )
 """
                 setup_bat_text = """@echo off
+set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
 chcp 65001 > nul
 title ASS - Worker Environment Setup
 cd /d "%~dp0"
@@ -4038,6 +4106,14 @@ echo ======================================================================
 echo   ASS Worker - Initial Environment Setup (Python 3.10+)
 echo ======================================================================
 echo.
+
+if exist "%~dp0venv\\python.exe" (
+    echo [INFO] Portable Python environment is already bundled and ready!
+    echo No additional setup required. You can launch run_worker.bat directly.
+    echo.
+    pause
+    exit /b 0
+)
 
 echo [1/3] Creating virtual environment (Python 3.10+)...
 python -m venv venv
@@ -4066,13 +4142,14 @@ pause
 Имя узла       : {w_name}
 ID воркера     : {w_id}
 Мастер-сервер  : {m_url}
-Окружение venv : {'Включено (готово к работе)' if include_venv else 'Не включено (требуется запустить setup_worker.bat)'}
+Окружение      : {'Полностью автономный Portable Python + PyTorch (установка Python НЕ требуется)' if include_venv else 'Легковесный пакет (требуется установленный Python 3.10+)'}
 Веса моделей   : {'Включены (автономная работа без интернета)' if include_models else 'Будут скачаны при первом запуске'}
-Требования     : Компьютер в локальной сети клиники с 16 ГБ ОЗУ (CPU или GPU)
+Требования     : Компьютер в локальной сети с 16 ГБ ОЗУ (CPU или NVIDIA GPU)
 
 ИНСТРУКЦИЯ ПО РАЗВЕРТЫВАНИЮ:
-1. Распакуйте содержимое данного архива в любую папку на компьютере воркера
+1. Распакуйте содержимое данного архива в чистую папку на компьютере воркера
    (например, C:\\ASS_Worker).
+   ВАЖНО: Если воркер уже запускался, перед распаковкой закройте предыдущее окно воркера.
 2. Запустите файл run_worker.bat от имени обычного пользователя.
 3. Воркер запустит вычислительный процесс и автоматически подключится к серверу:
    {m_url}
@@ -4109,9 +4186,33 @@ ID воркера     : {w_id}
                     if p.exists():
                         entries.append(("file", p, root_file))
 
-                # 6. Окружение Python + PyTorch (venv)
-                if include_venv and Path("venv").exists():
-                    entries.append(("dir", Path("venv"), "venv", [".tmp", ".log", "__pycache__"]))
+                # 6. Полностью автономный Portable Python + PyTorch (venv)
+                if include_venv:
+                    base_py_dir = Path(sys.base_prefix)
+                    # 6.1. Базовые исполняемые файлы и системные библиотеки CPython
+                    for f in ["python.exe", "pythonw.exe"]:
+                        bin_p = base_py_dir / f
+                        if bin_p.exists():
+                            entries.append(("file", bin_p, f"venv/{f}"))
+                    for dll_p in base_py_dir.glob("*.dll"):
+                        entries.append(("file", dll_p, f"venv/{dll_p.name}"))
+                    
+                    # 6.2. Системные DLL (C-расширения сокетов, ssl и т.д.)
+                    dlls_dir = base_py_dir / "DLLs"
+                    if dlls_dir.exists():
+                        entries.append(("dir", dlls_dir, "venv/DLLs", []))
+
+                    # 6.3. Стандартная библиотека Python
+                    lib_dir = base_py_dir / "Lib"
+                    if lib_dir.exists():
+                        entries.append(("dir", lib_dir, "venv/Lib", ["site-packages", "__pycache__", ".tmp", ".log", "test", "tests"]))
+
+                    # 6.4. Установленные пакеты ИИ из site-packages виртуального окружения
+                    venv_site_pkgs = Path("venv/Lib/site-packages")
+                    if venv_site_pkgs.exists():
+                        entries.append(("dir", venv_site_pkgs, "venv/Lib/site-packages", [
+                            "__pycache__", ".tmp", ".log", ".pytest_cache", ".git", "tests", "examples"
+                        ]))
 
                 # 7. Веса TotalSegmentator (автономная работа без интернета)
                 if include_models:

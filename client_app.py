@@ -212,7 +212,7 @@ try:
     from version import get_version, is_newer_version
 
     class UpdateCheckerThread(QThread):
-        """Поток для асинхронной проверки обновлений (сначала с локального сервера ASS, затем с GitHub)."""
+        """Поток для асинхронной проверки обновлений только с локального сервера ASS."""
         # (success, latest_version, download_or_release_url, error_msg, is_from_server, is_critical, changelog)
         finished_signal = pyqtSignal(bool, str, str, str, bool, bool, str)
         
@@ -223,47 +223,32 @@ try:
             
         def run(self):
             import requests
-            # 1. Проверяем локальный сервер ASS (Auto-Update Hub в клинике)
-            if self.server_url:
-                try:
-                    clean_server = self.server_url.rstrip("/")
-                    res = requests.get(
-                        f"{clean_server}/api/updates/client/info",
-                        params={"client_version": self.current_version},
-                        timeout=3
-                    )
-                    if res.status_code == 200:
-                        data = res.json()
-                        latest_v = data.get("latest_version", "")
-                        has_up = data.get("has_update", False)
-                        changelog = data.get("changelog", "")
-                        is_crit = data.get("is_critical", False)
-                        if has_up and latest_v:
-                            dl_url = f"{clean_server}/api/updates/client/download"
-                            self.finished_signal.emit(True, latest_v, dl_url, "", True, is_crit, changelog)
-                            return
-                except Exception:
-                    pass
+            if not self.server_url:
+                self.finished_signal.emit(False, "", "", "Адрес сервера не указан", False, False, "")
+                return
 
-            # 2. Если на локальном сервере обновления нет или он недоступен, проверяем GitHub Releases
             try:
-                url = "https://github.com/EvgeniyKrasnyanskiy/ASS/releases/latest"
-                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-                response = requests.get(url, headers=headers, timeout=5, allow_redirects=True)
-                if response.status_code == 200:
-                    final_url = response.url
-                    if "/releases/tag/" in final_url:
-                        tag_name = final_url.split("/releases/tag/")[-1].strip()
-                        latest_version = tag_name.lstrip('v')
-                        self.finished_signal.emit(True, latest_version, final_url, "", False, False, "")
-                        return
-                    else:
-                        self.finished_signal.emit(False, "", "", "Не удалось определить версию из ответа GitHub", False, False, "")
-                        return
+                clean_server = self.server_url.rstrip("/")
+                res = requests.get(
+                    f"{clean_server}/api/updates/client/info",
+                    params={"client_version": self.current_version},
+                    timeout=4
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    latest_v = data.get("latest_version", self.current_version)
+                    has_up = data.get("has_update", False)
+                    changelog = data.get("changelog", "")
+                    is_crit = data.get("is_critical", False)
+                    dl_url = f"{clean_server}/api/updates/client/download" if (has_up and latest_v) else ""
+                    self.finished_signal.emit(True, latest_v, dl_url, "", True, is_crit, changelog)
+                    return
                 else:
-                    self.finished_signal.emit(False, "", "", f"Ошибка сервера: {response.status_code}", False, False, "")
+                    self.finished_signal.emit(False, "", "", f"Ошибка сервера: {res.status_code}", True, False, "")
+                    return
             except Exception as e:
-                self.finished_signal.emit(False, "", "", f"Ошибка: {str(e)}", False, False, "")
+                self.finished_signal.emit(False, "", "", f"Сервер обновлений недоступен ({str(e)})", True, False, "")
+                return
 
     class DownloadUpdateWorker(QThread):
         """Поток для фонового скачивания файла обновления клиента."""
@@ -1803,6 +1788,7 @@ if PYQT_AVAILABLE:
             self.setMinimumSize(960, 760)
             if not self.splash:
                 self.showMaximized()
+            self._is_initialized = False
             self.existing_rtstruct_path = None
             self.is_updating_presets = False
             self.collapsed_groups = {"Остальное": True, "Отделы головного мозга (Brain Structures)": True}
@@ -1885,6 +1871,7 @@ if PYQT_AVAILABLE:
             if self.splash:
                 self.splash.set_progress(95, "Синхронизация конфигурации с сервером...")
             self.sync_config_from_server()
+            self._is_initialized = True
 
         def init_ui(self):
             # Установка премиальной иконки клиента
@@ -2901,7 +2888,7 @@ if PYQT_AVAILABLE:
             self.btn_check_update.setEnabled(False)
             self.btn_download_update.setVisible(False)
             self.update_progress_bar.setVisible(False)
-            self.lbl_update_status.setText("Проверка обновлений на сервере ASS и GitHub...")
+            self.lbl_update_status.setText("Проверка обновлений на сервере ASS...")
             self.lbl_update_status.setStyleSheet("color: #7f8c8d; font-style: italic;")
             
             server_url = self.get_server_url()
@@ -2925,18 +2912,14 @@ if PYQT_AVAILABLE:
                 self.available_update_is_server = is_from_server
                 self.available_update_is_critical = is_critical
                 
-                source_desc = "на сервере клиники" if is_from_server else "на GitHub"
                 critical_badge = " <b style='color: #e74c3c;'>[ОБЯЗАТЕЛЬНОЕ]</b>" if is_critical else ""
                 
                 status_html = (
                     f"Доступна новая версия: <b style='color: #2ecc71;'>v{latest_version}</b>{critical_badge} "
-                    f"({source_desc}, текущая v{current})."
+                    f"(на сервере клиники, текущая v{current})."
                 )
                 if changelog:
                     status_html += f"<br><i>Изменения: {changelog}</i>"
-                    
-                if not is_from_server:
-                    status_html += f"<br><a href='{release_url}' style='color: #3498db; text-decoration: underline;'>Перейти к релизу на GitHub</a>"
                     
                 self.lbl_update_status.setText(status_html)
                 self.lbl_update_status.setStyleSheet("")
@@ -3401,7 +3384,9 @@ if PYQT_AVAILABLE:
                 self.smoothing_combo.setCurrentIndex(smoothing_idx)
 
                 color_preset = self.settings.value("color_preset", "Цвета QUANTEC")
+                self.color_preset_combo.blockSignals(True)
                 self.color_preset_combo.setCurrentText(color_preset)
+                self.color_preset_combo.blockSignals(False)
 
                 play_sound = self.settings.value("play_sound", True, type=bool)
                 self.sound_check.setChecked(play_sound)
@@ -5727,17 +5712,18 @@ if PYQT_AVAILABLE:
                 if hasattr(self, 'global_colors'):
                     self.global_colors = self.engine.colors.copy()
                 
-                # Отправляем новую цветовую гамму на сервер по сети
-                server_url = self.get_server_url()
-                if server_url:
-                    client_id = self.client_name_edit.text().strip()
-                    headers = {"X-Client-ID": client_id}
-                    try:
-                        import requests
-                        requests.post(f"{server_url}/api/config/colors", json={"colors": palette}, headers=headers, timeout=5)
-                        self.sync_config_from_server()
-                    except Exception as se:
-                        logger.warning(f"Не удалось отправить выбранную цветовую гамму на сервер: {se}")
+                # Отправляем новую цветовую гамму на сервер по сети (только если GUI полностью инициализирован)
+                if getattr(self, '_is_initialized', False):
+                    server_url = self.get_server_url()
+                    if server_url:
+                        client_id = self.client_name_edit.text().strip()
+                        headers = {"X-Client-ID": client_id}
+                        try:
+                            import requests
+                            requests.post(f"{server_url}/api/config/colors", json={"colors": palette}, headers=headers, timeout=2)
+                            self.sync_config_from_server()
+                        except Exception as se:
+                            logger.debug(f"Не удалось отправить выбранную цветовую гамму на сервер: {se}")
                 
                 # Обновляем все иконки в списке с временной блокировкой сигналов
                 self.structures_list.blockSignals(True)

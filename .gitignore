@@ -62,4 +62,4 @@ ASS_ToDo.txt
 
 # Локальные дистрибутивы обновлений
 updates/
-
+config/registered_workers.json

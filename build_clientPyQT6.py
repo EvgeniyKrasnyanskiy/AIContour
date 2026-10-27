@@ -127,7 +127,7 @@ def build_executable(has_icon):
         pyinstaller_bin,
         "--noconfirm",
         "--onefile",
-        "--console",
+        "--windowed",
         "--add-data=icon_client.ico;.",
         "--add-data=icon_client.png;.",
         "--add-data=app_icon.ico;.",
