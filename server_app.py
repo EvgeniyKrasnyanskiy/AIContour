@@ -4180,8 +4180,8 @@ ID воркера     : {w_id}
                 entries.append(("data", setup_bat_text.encode("utf-8"), "setup_worker.bat"))
                 entries.append(("data", readme_text.encode("utf-8"), "README_WORKER.txt"))
 
-                # 5. Корневые модули
-                for root_file in ["version.py", "requirements.txt"]:
+                # 5. Корневые модули движка и конфигурации
+                for root_file in ["version.py", "version.txt", "requirements.txt", "contour_engine.py", "config.py"]:
                     p = Path(root_file)
                     if p.exists():
                         entries.append(("file", p, root_file))
