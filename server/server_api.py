@@ -151,16 +151,32 @@ def on_app_startup():
     try:
         import configparser
         ini_path = Path(__file__).resolve().parent.parent / "config" / "server_settings.ini"
+        role = os.environ.get("ASS_CLUSTER_ROLE", "").strip().lower()
+        cfg = configparser.ConfigParser()
         if ini_path.exists():
-            cfg = configparser.ConfigParser()
-            cfg.read(ini_path, encoding="utf-8")
-            role = cfg.get("General", "cluster_role", fallback="master").strip().lower()
-            if role == "worker":
-                import socket
-                import uuid
-                worker_id = cfg.get("General", "worker_id", fallback="") or f"worker_{socket.gethostname()}_{uuid.uuid4().hex[:6]}"
-                worker_name = cfg.get("General", "worker_name", fallback="") or f"Worker-{socket.gethostname()}"
-                master_url = cfg.get("General", "master_url", fallback="")
+            try:
+                cfg.read(ini_path, encoding="utf-8")
+                if not role:
+                    role = cfg.get("General", "cluster_role", fallback="master").strip().lower()
+            except Exception:
+                pass
+        if not role:
+            role = "master"
+
+        if role == "worker":
+            import socket
+            import uuid
+            worker_id = os.environ.get("ASS_WORKER_ID") or cfg.get("General", "worker_id", fallback="") or f"worker_{socket.gethostname()}_{uuid.uuid4().hex[:6]}"
+            worker_name = os.environ.get("ASS_WORKER_NAME") or cfg.get("General", "worker_name", fallback="") or f"Worker-{socket.gethostname()}"
+            master_url = os.environ.get("ASS_MASTER_URL") or cfg.get("General", "master_url", fallback="")
+            if not master_url:
+                candidate = cfg.get("General", "server_url", fallback="")
+                if candidate and "127.0.0.1" not in candidate and "localhost" not in candidate:
+                    master_url = candidate
+
+            if not master_url:
+                logger.error("[КРИТИЧЕСКАЯ ОШИБКА] Не указан master_url в config/server_settings.ini! Воркер не знает, к какому Мастер-серверу подключаться. Добавьте в config/server_settings.ini: master_url = http://<IP_МАСТЕРА>:8000")
+            else:
                 worker_client_thread = WorkerClientThread(
                     worker_id=worker_id,
                     name=worker_name,
@@ -169,7 +185,7 @@ def on_app_startup():
                     exec_mgr=worker_exec_mgr
                 )
                 worker_client_thread.start()
-                logger.info(f"Сервер запущен в режиме WORKER. Имя узла: '{worker_name}'.")
+                logger.info(f"Сервер запущен в режиме WORKER. Имя узла: '{worker_name}', Мастер: '{master_url}'.")
     except Exception as e:
         logger.warning(f"Не удалось инициализировать режим воркера на старте: {e}")
 

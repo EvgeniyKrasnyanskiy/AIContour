@@ -7,6 +7,7 @@ rem Clear proxy settings to prevent Master connection errors
 set HTTP_PROXY=
 set HTTPS_PROXY=
 set NO_PROXY=*
+set ASS_CLUSTER_ROLE=worker
 
 echo ======================================================================
 echo   ASS (Auto Segmentation System) - Compute Worker Node

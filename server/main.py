@@ -56,14 +56,16 @@ if __name__ == "__main__":
     
     import configparser
     ini_path = Path(__file__).resolve().parent.parent / "config" / "server_settings.ini"
-    role = "master"
-    if ini_path.exists():
+    role = os.environ.get("ASS_CLUSTER_ROLE", "").strip().lower()
+    if not role and ini_path.exists():
         try:
             cfg = configparser.ConfigParser()
             cfg.read(ini_path, encoding="utf-8")
             role = cfg.get("General", "cluster_role", fallback="master").strip().lower()
         except Exception:
             role = "master"
+    if not role:
+        role = "master"
 
     discovery_srv = None
     if role == "master":

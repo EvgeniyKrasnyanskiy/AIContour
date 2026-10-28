@@ -4093,6 +4093,7 @@ rem Clear proxy settings to prevent Master connection errors
 set HTTP_PROXY=
 set HTTPS_PROXY=
 set NO_PROXY=*
+set ASS_CLUSTER_ROLE=worker
 
 echo ======================================================================
 echo   ASS (Auto Segmentation System) - Compute Worker Node
@@ -4383,6 +4384,7 @@ cd /d "%~dp0"
 set HTTP_PROXY=
 set HTTPS_PROXY=
 set NO_PROXY=*
+set ASS_CLUSTER_ROLE=worker
 
 if exist "%~dp0totalseg_home\\nnunet" (
     set "TOTALSEG_HOME_DIR=%~dp0totalseg_home"
