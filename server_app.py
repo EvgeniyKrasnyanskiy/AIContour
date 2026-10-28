@@ -2182,8 +2182,8 @@ if PYQT_AVAILABLE:
             layout.addWidget(lbl_head)
 
             lbl_desc = QLabel(
-                "Формирует полностью автономный ZIP-дистрибутив для ПК в сети клиники с 16 ГБ ОЗУ.<br>"
-                "Пакет содержит все зависимости, окружение и веса ИИ для мгновенного запуска 'из коробки'."
+                "Формирует готовый ZIP-дистрибутив воркера для развертывания на ПК клиники.<br>"
+                "Воркер разворачивается в 1 клик через <b>run_worker.bat</b> (автоматическая настройка окружения)."
             )
             lbl_desc.setWordWrap(True)
             lbl_desc.setStyleSheet("color: #a4b0be; font-size: 11px;")
@@ -2201,23 +2201,23 @@ if PYQT_AVAILABLE:
             self.url_edit = QLineEdit(default_master_url)
             layout.addWidget(self.url_edit)
 
-            lbl_comp_opts = QLabel("<b>📦 Состав автономного пакета:</b>")
+            lbl_comp_opts = QLabel("<b>📦 Состав пакета воркера:</b>")
             lbl_comp_opts.setStyleSheet("color: #00d2d3; font-size: 12px; margin-top: 6px;")
             layout.addWidget(lbl_comp_opts)
 
-            self.chk_include_venv = QCheckBox("Включить автономный Portable Python + PyTorch (~4-5 ГБ)")
-            self.chk_include_venv.setChecked(True)
-            self.chk_include_venv.setToolTip("Полностью автономный дистрибутив. Установка Python на целевой ПК НЕ требуется — запуск в 1 клик.")
-            layout.addWidget(self.chk_include_venv)
-
-            self.chk_include_models = QCheckBox("Включить веса нейросетей TotalSegmentator (~1.3 ГБ)")
+            self.chk_include_models = QCheckBox("Включить веса нейросетей TotalSegmentator (~1.3 ГБ) [Рекомендуется]")
             self.chk_include_models.setChecked(True)
-            self.chk_include_models.setToolTip("Включает предобученные веса моделей из кэша сервера, чтобы узел мог оконтуривать оффлайн.")
+            self.chk_include_models.setToolTip("Копирует предобученные веса моделей в архив. Узел сможет работать оффлайн без скачивания моделей.")
             layout.addWidget(self.chk_include_models)
 
-            self.chk_fast_compression = QCheckBox("Быстрое сжатие (рекомендуется для больших пакетов >1 ГБ)")
+            self.chk_include_venv = QCheckBox("Включить готовый Portable Python (~4-5 ГБ) вместо автоустановки через pip")
+            self.chk_include_venv.setChecked(False)
+            self.chk_include_venv.setToolTip("Если выключено: архив компактный (~30 МБ без весов / ~1.3 ГБ с весами), а библиотеки скачиваются через pip при первом запуске run_worker.bat.")
+            layout.addWidget(self.chk_include_venv)
+
+            self.chk_fast_compression = QCheckBox("Быстрое сжатие ZIP (уровень 1)")
             self.chk_fast_compression.setChecked(True)
-            self.chk_fast_compression.setToolTip("Сжатие уровня 1 ускоряет сборку в 3-4 раза при минимальной разнице в итоговом размере.")
+            self.chk_fast_compression.setToolTip("Сжатие уровня 1 ускоряет создание архива в несколько раз.")
             layout.addWidget(self.chk_fast_compression)
 
             layout.addStretch()
@@ -2243,6 +2243,7 @@ if PYQT_AVAILABLE:
                 "id": self.id_edit.text().strip(),
                 "master_url": self.url_edit.text().strip(),
                 "include_venv": self.chk_include_venv.isChecked(),
+                "pip_install": not self.chk_include_venv.isChecked(),
                 "include_models": self.chk_include_models.isChecked(),
                 "fast_compression": self.chk_fast_compression.isChecked()
             }
@@ -4057,7 +4058,8 @@ exit
             w_name = vals["name"] or default_name
             w_id = vals["id"] or default_id
             m_url = vals["master_url"] or default_url
-            include_venv = vals.get("include_venv", True)
+            include_venv = vals.get("include_venv", False)
+            pip_install = vals.get("pip_install", not include_venv)
             include_models = vals.get("include_models", True)
             fast_comp = vals.get("fast_compression", True)
             compress_level = 1 if fast_comp else 6
@@ -4085,6 +4087,12 @@ set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
 chcp 65001 > nul
 title ASS - Compute Worker [{w_name}]
 cd /d "%~dp0"
+
+:: Отключение прокси для исключения сбоев связи с Мастером
+set HTTP_PROXY=
+set HTTPS_PROXY=
+set NO_PROXY=*
+
 echo ======================================================================
 echo   ASS (Auto Segmentation System) - Compute Worker Node
 echo   Worker Name : {w_name}
@@ -4099,16 +4107,31 @@ if exist "%~dp0totalseg_home\\nnunet" (
     echo [INFO] Offline TotalSegmentator AI weights activated: %~dp0totalseg_home
 )
 
-if exist "%~dp0venv\\python.exe" (
-    echo [INFO] Launching ASS Worker via bundled portable Python...
-    "%~dp0venv\\python.exe" server\\main.py
+:: Проверка наличия окружения venv
+if exist "%~dp0venv\\Scripts\\python.exe" goto :run_existing_venv
+if exist "%~dp0venv\\python.exe" goto :run_portable_py
+
+:: Если окружение еще не создано — выполняем автоматическое первичное развертывание в 1 клик!
+echo [1-CLICK SETUP] Первичный запуск: автоматическая настройка окружения воркера...
+call "%~dp0setup_worker.bat" --auto
+if %errorlevel% neq 0 (
+    echo.
+    echo [ERROR] Первичная настройка воркера завершилась с ошибкой.
+    pause
+    exit /b 1
+)
+
+:run_existing_venv
+if exist "%~dp0venv\\Scripts\\python.exe" (
+    echo [INFO] Launching ASS Worker via virtual environment...
+    "%~dp0venv\\Scripts\\python.exe" server\\main.py
     goto :worker_exit
 )
 
-if exist "%~dp0venv\\Scripts\\python.exe" (
-    echo [INFO] Launching ASS Worker via virtual environment...
-    call "%~dp0venv\\Scripts\\activate.bat"
-    python server\\main.py
+:run_portable_py
+if exist "%~dp0venv\\python.exe" (
+    echo [INFO] Launching ASS Worker via bundled portable Python...
+    "%~dp0venv\\python.exe" server\\main.py
     goto :worker_exit
 )
 
@@ -4127,39 +4150,60 @@ set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
 chcp 65001 > nul
 title ASS - Worker Environment Setup
 cd /d "%~dp0"
+
+:: Отключение прокси для чистой загрузки пакетов
+set HTTP_PROXY=
+set HTTPS_PROXY=
+set NO_PROXY=*
+
 echo ======================================================================
-echo   ASS Worker - Initial Environment Setup (Python 3.10+)
+echo   ASS Worker - Initial Environment Setup (Python 3.10 / 3.11)
 echo ======================================================================
 echo.
 
 if exist "%~dp0venv\\python.exe" (
     echo [INFO] Portable Python environment is already bundled and ready!
-    echo No additional setup required. You can launch run_worker.bat directly.
-    echo.
-    pause
+    if "%~1"=="" pause
     exit /b 0
 )
 
-echo [1/3] Creating virtual environment (Python 3.10+)...
-python -m venv venv
+:: Проверка наличия системного Python
+python --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] Failed to create venv. Ensure Python 3.10+ is installed and in PATH.
-    pause
+    echo [ERROR] Python не найден в системе (PATH)!
+    echo Пожалуйста, установите Python 3.10 или 3.11 с официального сайта python.org
+    echo ВАЖНО: обязательно отметьте галочку "Add Python to PATH" при установке!
+    echo.
+    if "%~1"=="" pause
     exit /b 1
 )
 
-echo [2/3] Upgrading pip...
-call venv\\Scripts\\activate.bat
+if not exist "%~dp0venv\\Scripts\\python.exe" (
+    echo [1/3] Создание виртуального окружения venv (Python)...
+    python -m venv venv
+    if %errorlevel% neq 0 (
+        echo [ERROR] Не удалось создать виртуальное окружение venv!
+        if "%~1"=="" pause
+        exit /b 1
+    )
+)
+
+echo [2/3] Обновление pip...
+call "%~dp0venv\\Scripts\\activate.bat"
 python -m pip install --upgrade pip
 
-echo [3/3] Installing worker dependencies from requirements.txt...
+echo [3/3] Установка зависимостей из requirements.txt через pip...
 pip install -r requirements.txt
+if %errorlevel% neq 0 (
+    echo [WARNING] Некоторые пакеты не установились с первого раза, повторная попытка...
+    pip install -r requirements.txt
+)
 
 echo.
 echo ======================================================================
-echo   Worker setup complete! You can now launch: run_worker.bat
+echo   Настройка окружения воркера успешно завершена!
 echo ======================================================================
-pause
+if "%~1"=="" pause
 """
                 readme_text = f"""================================================================================
 РУКОВОДСТВО ПО ПОДКЛЮЧЕНИЮ ВЫЧИСЛИТЕЛЬНОГО УЗЛА ASS (WORKER)
@@ -4167,44 +4211,48 @@ pause
 Имя узла       : {w_name}
 ID воркера     : {w_id}
 Мастер-сервер  : {m_url}
-Окружение      : {'Полностью автономный Portable Python + PyTorch (установка Python НЕ требуется)' if include_venv else 'Легковесный пакет (требуется установленный Python 3.10+)'}
-Веса моделей   : {'Включены (автономная работа без интернета)' if include_models else 'Будут скачаны при первом запуске'}
+Окружение      : {'Полностью автономный Portable Python (без интернета)' if include_venv else 'Компактный пакет (зависимости ставятся в 1 клик через pip при первом запуске)'}
+Веса моделей   : {'Включены в архив (автономный инференс без скачивания)' if include_models else 'Будут скачаны при первом расчете'}
 Требования     : Компьютер в локальной сети с 16 ГБ ОЗУ (CPU или NVIDIA GPU)
 
-ИНСТРУКЦИЯ ПО РАЗВЕРТЫВАНИЮ:
-1. Распакуйте содержимое данного архива в чистую папку на компьютере воркера
-   (например, C:\\ASS_Worker).
-   ВАЖНО: Если воркер уже запускался, перед распаковкой закройте предыдущее окно воркера.
-2. Варианты запуска:
-   - С консольным окном (для отладки) : запустите run_worker.bat
-   - Без консоли (в тихом режиме)     : запустите run_worker_no_console.bat
-   - Добавить в автозагрузку Windows : запустите add_to_startup.bat
-   - Удалить из автозагрузки          : запустите remove_from_startup.bat
-3. Управление и диагностика:
-   - Проверить статус работы воркера  : запустите status_worker.bat
-   - Остановить фоновый процесс воркера: запустите stop_worker.bat
-4. Воркер запустит вычислительный процесс и автоматически подключится к серверу:
-   {m_url}
-5. На главном сервере во вкладке «Кластер» узел {w_name} моментально появится
-   со статусом «Свободен» (зеленый индикатор) и начнет параллельно обрабатывать КТ.
+ИНСТРУКЦИЯ ПО РАЗВЕРТЫВАНИЮ В 1 КЛИК:
+1. Распакуйте содержимое данного архива в любую папку на ПК воркера
+   (например, D:\\ASS_Worker или C:\\ASS_Worker).
+2. Для запуска просто дважды кликните run_worker.bat:
+   - При первом запуске скрипт САМ в 1 клик создаст venv и скачает все библиотеки через pip!
+   - После этого воркер автоматически зарегистрируется на Мастер-сервере:
+     {m_url}
+3. Варианты работы:
+   - Обычный запуск с консолью      : run_worker.bat
+   - Фоновый тихий запуск (без окна): run_worker_no_console.bat
+   - Автозагрузка при старте Windows: add_to_startup.bat
+   - Удаление из автозагрузки       : remove_from_startup.bat
+   - Проверка статуса службы        : status_worker.bat
+   - Остановка фонового процесса    : stop_worker.bat
+4. На главном сервере во вкладке «⚡ Кластер» узел {w_name} сразу отобразится
+   со статусом «🟢 Свободен» и начнет параллельно обрабатывать задачи КТ.
 ================================================================================
 """
                 run_no_console_text = f"""@echo off
 set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
 cd /d "%~dp0"
 
+set HTTP_PROXY=
+set HTTPS_PROXY=
+set NO_PROXY=*
+
 if exist "%~dp0totalseg_home\\nnunet" (
     set "TOTALSEG_HOME_DIR=%~dp0totalseg_home"
     set "TOTALSEG_WEIGHTS_PATH=%~dp0totalseg_home\\nnunet\\results"
 )
 
-if exist "%~dp0venv\\pythonw.exe" (
-    start "" "%~dp0venv\\pythonw.exe" server\\main.py
+if exist "%~dp0venv\\Scripts\\pythonw.exe" (
+    start "" "%~dp0venv\\Scripts\\pythonw.exe" server\\main.py
     exit /b 0
 )
 
-if exist "%~dp0venv\\Scripts\\pythonw.exe" (
-    start "" "%~dp0venv\\Scripts\\pythonw.exe" server\\main.py
+if exist "%~dp0venv\\pythonw.exe" (
+    start "" "%~dp0venv\\pythonw.exe" server\\main.py
     exit /b 0
 )
 
@@ -4318,13 +4366,11 @@ pause
 """
                 entries = []
 
-                # 1. Серверный бэкенд
+                # 1. Серверный бэкенд и исходный код модулей
                 entries.append(("dir", Path("server"), "server", [".pyc", "__pycache__", ".log"]))
-
-                # 2. Исходный код модулей движка и утилит
                 entries.append(("dir", Path("src"), "src", [".pyc", "__pycache__", ".log"]))
 
-                # 3. Конфигурационные файлы
+                # 2. Конфигурационные файлы и пресеты органов
                 if Path("config/presets").exists():
                     entries.append(("dir", Path("config/presets"), "config/presets", []))
                 for cfg_name in ["colors.json", "licenses.json", "structure_names.json", "translations.json"]:
@@ -4332,7 +4378,7 @@ pause
                     if p.exists():
                         entries.append(("file", p, f"config/{cfg_name}"))
 
-                # 4. Файлы запуска и настройки воркера
+                # 3. Файлы запуска и настройки воркера
                 entries.append(("data", ini_text.encode("utf-8"), "config/server_settings.ini"))
                 entries.append(("data", run_bat_text.encode("utf-8"), "run_worker.bat"))
                 entries.append(("data", run_no_console_text.encode("utf-8"), "run_worker_no_console.bat"))
@@ -4343,13 +4389,23 @@ pause
                 entries.append(("data", setup_bat_text.encode("utf-8"), "setup_worker.bat"))
                 entries.append(("data", readme_text.encode("utf-8"), "README_WORKER.txt"))
 
-                # 5. Корневые модули движка и конфигурации
+                # 4. Корневые модули движка и файл зависимостей requirements.txt
                 for root_file in ["version.py", "version.txt", "requirements.txt", "contour_engine.py", "config.py"]:
                     p = Path(root_file)
                     if p.exists():
                         entries.append(("file", p, root_file))
 
-                # 6. Полностью автономный Portable Python + PyTorch (venv)
+                # 5. Веса TotalSegmentator (автономная работа без интернета)
+                if include_models:
+                    totalseg_src = None
+                    if Path("totalseg_home").exists() and (Path("totalseg_home") / "nnunet").exists():
+                        totalseg_src = Path("totalseg_home")
+                    elif (Path.home() / ".totalsegmentator").exists():
+                        totalseg_src = Path.home() / ".totalsegmentator"
+                    if totalseg_src:
+                        entries.append(("dir", totalseg_src, "totalseg_home", [".tmp", "__MACOSX", ".git"]))
+
+                # 6. Полностью автономный Portable Python (только при явном включении include_venv)
                 if include_venv:
                     base_py_dir = Path(sys.base_prefix)
                     # 6.1. Базовые исполняемые файлы и системные библиотеки CPython
@@ -4376,12 +4432,6 @@ pause
                         entries.append(("dir", venv_site_pkgs, "venv/Lib/site-packages", [
                             "__pycache__", ".tmp", ".log", ".pytest_cache", ".git", ".pyc"
                         ]))
-
-                # 7. Веса TotalSegmentator (автономная работа без интернета)
-                if include_models:
-                    totalseg_home = Path.home() / ".totalsegmentator"
-                    if totalseg_home.exists():
-                        entries.append(("dir", totalseg_home, "totalseg_home", [".tmp", "__MACOSX"]))
 
                 pkg_dlg = PackageProgressDialog(
                     title=f"📦 Создание пакета воркера [{w_name}]",
