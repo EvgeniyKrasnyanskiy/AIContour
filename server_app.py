@@ -4593,11 +4593,20 @@ pause
                         entries.append(("dir", lib_dir, "venv/Lib", ["site-packages", "__pycache__", ".tmp", ".log", ".pyc"]))
 
                     # 6.4. Установленные пакеты ИИ из site-packages виртуального окружения
+                    # Исключаем тяжелые GUI библиотеки (PyQt), сетевые приемники (pynetdicom) и тесты
                     venv_site_pkgs = Path("venv/Lib/site-packages")
                     if venv_site_pkgs.exists():
                         entries.append(("dir", venv_site_pkgs, "venv/Lib/site-packages", [
-                            "__pycache__", ".tmp", ".log", ".pytest_cache", ".git", ".pyc"
+                            "__pycache__", ".tmp", ".log", ".pytest_cache", ".git", ".pyc",
+                            "pynetdicom", "PyQt5", "PyQt6", "pyqtgraph", "tests", "test"
                         ]))
+
+                    # 6.5. Конфигурация изолированного виртуального окружения
+                    pyvenv_cfg_text = f"""home = .
+include-system-site-packages = false
+version = {sys.version.split()[0]}
+"""
+                    entries.append(("data", pyvenv_cfg_text.encode("utf-8"), "venv/pyvenv.cfg"))
 
                 pkg_dlg = PackageProgressDialog(
                     title=f"📦 Создание пакета воркера [{w_name}]",
