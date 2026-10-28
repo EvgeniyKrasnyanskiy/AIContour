@@ -4084,11 +4084,10 @@ temp_dir=
 """
                 run_bat_text = f"""@echo off
 set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
-chcp 65001 > nul
 title ASS - Compute Worker [{w_name}]
 cd /d "%~dp0"
 
-:: Отключение прокси для исключения сбоев связи с Мастером
+rem Clear proxy settings to prevent Master connection errors
 set HTTP_PROXY=
 set HTTPS_PROXY=
 set NO_PROXY=*
@@ -4107,18 +4106,20 @@ if exist "%~dp0totalseg_home\\nnunet" (
     echo [INFO] Offline TotalSegmentator AI weights activated: %~dp0totalseg_home
 )
 
-:: Проверка наличия окружения venv
+rem Check if virtual environment exists
 if exist "%~dp0venv\\Scripts\\python.exe" goto :run_existing_venv
 if exist "%~dp0venv\\python.exe" goto :run_portable_py
 
-:: Если окружение еще не создано — выполняем автоматическое первичное развертывание в 1 клик!
-echo [1-CLICK SETUP] Первичный запуск: автоматическая настройка окружения воркера...
-call "%~dp0setup_worker.bat" --auto
-if %errorlevel% neq 0 (
-    echo.
-    echo [ERROR] Первичная настройка воркера завершилась с ошибкой.
-    pause
-    exit /b 1
+rem First time setup: run automated 1-click installer
+if exist "%~dp0setup_worker.bat" (
+    echo [1-CLICK SETUP] First launch detected: setting up worker environment...
+    call "%~dp0setup_worker.bat" --auto
+    if errorlevel 1 (
+        echo.
+        echo [ERROR] Worker initial setup failed!
+        pause
+        exit /b 1
+    )
 )
 
 :run_existing_venv
@@ -4135,23 +4136,27 @@ if exist "%~dp0venv\\python.exe" (
     goto :worker_exit
 )
 
-echo [1/2] Activating system Python...
+echo [INFO] Launching ASS Worker via system Python...
 python server\\main.py
 
 :worker_exit
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo.
     echo [WARNING] Worker exited with code %errorlevel%
     pause
 )
 """
                 setup_bat_text = """@echo off
-set "PATH=%SystemRoot%\\System32;%SystemRoot%;%PATH%"
-chcp 65001 > nul
-title ASS - Worker Environment Setup
+set "PATH=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0;%SystemRoot%\\System32;%SystemRoot%;%PATH%"
 cd /d "%~dp0"
 
-:: Отключение прокси для чистой загрузки пакетов
+set "PS_EXE=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+if exist "%PS_EXE%" (
+    "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup_worker.ps1" %*
+    exit /b %errorlevel%
+)
+
+rem Fallback to CMD if PowerShell is not present
 set HTTP_PROXY=
 set HTTPS_PROXY=
 set NO_PROXY=*
@@ -4167,43 +4172,157 @@ if exist "%~dp0venv\\python.exe" (
     exit /b 0
 )
 
-:: Проверка наличия системного Python
+if exist "%~dp0venv\\Scripts\\python.exe" (
+    echo [INFO] Virtual environment already exists!
+    if "%~1"=="" pause
+    exit /b 0
+)
+
 python --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] Python не найден в системе (PATH)!
-    echo Пожалуйста, установите Python 3.10 или 3.11 с официального сайта python.org
-    echo ВАЖНО: обязательно отметьте галочку "Add Python to PATH" при установке!
+if errorlevel 1 (
+    echo [ERROR] Python not found in system PATH!
+    echo Please install Python 3.10 or 3.11 from https://www.python.org/downloads/
+    echo IMPORTANT: Make sure to check the box "Add Python to PATH"!
     echo.
     if "%~1"=="" pause
     exit /b 1
 )
 
-if not exist "%~dp0venv\\Scripts\\python.exe" (
-    echo [1/3] Создание виртуального окружения venv (Python)...
-    python -m venv venv
-    if %errorlevel% neq 0 (
-        echo [ERROR] Не удалось создать виртуальное окружение venv!
-        if "%~1"=="" pause
-        exit /b 1
-    )
+echo [1/3] Creating virtual environment (venv)...
+python -m venv venv
+if errorlevel 1 (
+    echo [ERROR] Failed to create venv!
+    if "%~1"=="" pause
+    exit /b 1
 )
 
-echo [2/3] Обновление pip...
+echo [2/3] Upgrading pip...
 call "%~dp0venv\\Scripts\\activate.bat"
 python -m pip install --upgrade pip
 
-echo [3/3] Установка зависимостей из requirements.txt через pip...
+echo [3/3] Installing dependencies from requirements.txt...
 pip install -r requirements.txt
-if %errorlevel% neq 0 (
-    echo [WARNING] Некоторые пакеты не установились с первого раза, повторная попытка...
+if errorlevel 1 (
+    echo [WARNING] Retrying pip install...
     pip install -r requirements.txt
 )
 
 echo.
 echo ======================================================================
-echo   Настройка окружения воркера успешно завершена!
+echo   Worker environment setup complete! You can now launch: run_worker.bat
 echo ======================================================================
 if "%~1"=="" pause
+"""
+                setup_ps1_text = """# ASS Worker - 1-Click Automated Environment Setup
+param(
+    [switch]$Auto
+)
+
+$ErrorActionPreference = "Continue"
+
+# 1. Clear proxy
+$env:HTTP_PROXY = ""
+$env:HTTPS_PROXY = ""
+$env:NO_PROXY = "*"
+
+Write-Host "======================================================================" -ForegroundColor Cyan
+Write-Host "  ASS Worker - Automated Environment Setup" -ForegroundColor Cyan
+Write-Host "======================================================================" -ForegroundColor Cyan
+Write-Host ""
+
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $scriptDir
+
+# 2. Check existing venv
+$venvPy = Join-Path $scriptDir "venv\\Scripts\\python.exe"
+$portablePy = Join-Path $scriptDir "venv\\python.exe"
+
+if (Test-Path $portablePy) {
+    Write-Host "[INFO] Bundled portable Python detected and ready: $portablePy" -ForegroundColor Green
+    if (-not $Auto) { Read-Host "Press Enter to continue..." }
+    exit 0
+}
+
+if (Test-Path $venvPy) {
+    Write-Host "[INFO] Virtual environment (venv) already exists: $venvPy" -ForegroundColor Green
+    if (-not $Auto) { Read-Host "Press Enter to continue..." }
+    exit 0
+}
+
+# 3. Detect Python
+Write-Host "[1/3] Detecting system Python..." -ForegroundColor Yellow
+$pyCmd = $null
+
+try {
+    $ver = & python --version 2>&1
+    if ($LASTEXITCODE -eq 0 -and $ver -match "Python") {
+        $pyCmd = "python"
+        Write-Host "  -> Found: $ver" -ForegroundColor Green
+    }
+} catch {}
+
+if (-not $pyCmd) {
+    try {
+        $ver = & py -3 --version 2>&1
+        if ($LASTEXITCODE -eq 0 -and $ver -match "Python") {
+            $pyCmd = "py -3"
+            Write-Host "  -> Found via py launcher: $ver" -ForegroundColor Green
+        }
+    } catch {}
+}
+
+if (-not $pyCmd) {
+    Write-Host ""
+    Write-Host "[ERROR] Python was NOT found in system PATH!" -ForegroundColor Red
+    Write-Host "Please install Python 3.10 or 3.11 from https://www.python.org/downloads/" -ForegroundColor Yellow
+    Write-Host "IMPORTANT: Make sure to check the box 'Add Python to PATH' during installation!" -ForegroundColor Yellow
+    Write-Host ""
+    if (-not $Auto) { Read-Host "Press Enter to continue..." }
+    exit 1
+}
+
+# 4. Create venv
+Write-Host ""
+Write-Host "[2/3] Creating virtual environment (venv)..." -ForegroundColor Yellow
+if ($pyCmd -eq "python") {
+    & python -m venv venv
+} else {
+    & py -3 -m venv venv
+}
+
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $venvPy)) {
+    Write-Host "[ERROR] Failed to create virtual environment 'venv'!" -ForegroundColor Red
+    if (-not $Auto) { Read-Host "Press Enter to continue..." }
+    exit 1
+}
+Write-Host "  -> Virtual environment created successfully." -ForegroundColor Green
+
+# 5. Install requirements
+Write-Host ""
+Write-Host "[3/3] Installing dependencies from requirements.txt..." -ForegroundColor Yellow
+$venvPip = Join-Path $scriptDir "venv\\Scripts\\pip.exe"
+
+& $venvPy -m pip install --upgrade pip --quiet
+$reqPath = Join-Path $scriptDir "requirements.txt"
+if (Test-Path $reqPath) {
+    & $venvPip install -r $reqPath
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[WARNING] Retrying dependency installation..." -ForegroundColor Yellow
+        & $venvPip install -r $reqPath
+    }
+}
+
+Write-Host ""
+Write-Host "======================================================================" -ForegroundColor Green
+Write-Host "  Worker environment setup completed successfully!" -ForegroundColor Green
+Write-Host "  You can now launch: run_worker.bat" -ForegroundColor Green
+Write-Host "======================================================================" -ForegroundColor Green
+Write-Host ""
+
+if (-not $Auto) {
+    Read-Host "Press Enter to continue..."
+}
+exit 0
 """
                 readme_text = f"""================================================================================
 РУКОВОДСТВО ПО ПОДКЛЮЧЕНИЮ ВЫЧИСЛИТЕЛЬНОГО УЗЛА ASS (WORKER)
@@ -4261,7 +4380,6 @@ exit /b 0
 """
                 status_worker_text = f"""@echo off
 set "PATH=%SystemRoot%\\System32\\WindowsPowerShell\\v1.0;%SystemRoot%\\System32;%SystemRoot%;%PATH%"
-chcp 65001 > nul
 cd /d "%~dp0"
 
 echo ======================================================================
@@ -4387,6 +4505,7 @@ pause
                 entries.append(("data", add_startup_text.encode("utf-8"), "add_to_startup.bat"))
                 entries.append(("data", remove_startup_text.encode("utf-8"), "remove_from_startup.bat"))
                 entries.append(("data", setup_bat_text.encode("utf-8"), "setup_worker.bat"))
+                entries.append(("data", setup_ps1_text.encode("utf-8"), "setup_worker.ps1"))
                 entries.append(("data", readme_text.encode("utf-8"), "README_WORKER.txt"))
 
                 # 4. Корневые модули движка и файл зависимостей requirements.txt

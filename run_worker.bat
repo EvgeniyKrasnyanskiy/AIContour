@@ -1,10 +1,9 @@
 @echo off
 set "PATH=%SystemRoot%\System32;%SystemRoot%;%PATH%"
-chcp 65001 > nul
 title ASS - Compute Worker Node
 cd /d "%~dp0"
 
-:: Отключение прокси для исключения сбоев связи с Мастером
+rem Clear proxy settings to prevent Master connection errors
 set HTTP_PROXY=
 set HTTPS_PROXY=
 set NO_PROXY=*
@@ -20,17 +19,17 @@ if exist "%~dp0totalseg_home\nnunet" (
     echo [INFO] Offline TotalSegmentator AI weights activated: %~dp0totalseg_home
 )
 
-:: Проверка наличия окружения venv
+rem Check if virtual environment exists
 if exist "%~dp0venv\Scripts\python.exe" goto :run_existing_venv
 if exist "%~dp0venv\python.exe" goto :run_portable_py
 
-:: Если venv еще нет — выполняем автоматическое первичное развертывание в 1 клик!
+rem First time setup: run automated 1-click installer
 if exist "%~dp0setup_worker.bat" (
-    echo [1-CLICK SETUP] Первичный запуск: автоматическая настройка окружения воркера...
+    echo [1-CLICK SETUP] First launch detected: setting up worker environment...
     call "%~dp0setup_worker.bat" --auto
-    if %errorlevel% neq 0 (
+    if errorlevel 1 (
         echo.
-        echo [ERROR] Первичная настройка воркера завершилась с ошибкой.
+        echo [ERROR] Worker initial setup failed!
         pause
         exit /b 1
     )
@@ -54,7 +53,7 @@ echo [INFO] Launching ASS Worker via system Python...
 python server\main.py
 
 :worker_exit
-if %errorlevel% neq 0 (
+if errorlevel 1 (
     echo.
     echo [WARNING] Worker exited with code %errorlevel%
     pause
