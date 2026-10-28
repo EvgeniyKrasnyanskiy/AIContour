@@ -4138,6 +4138,8 @@ if exist "%~dp0venv\\Scripts\\python.exe" (
 :run_portable_py
 if exist "%~dp0venv\\python.exe" (
     echo [INFO] Launching ASS Worker via bundled portable Python...
+    set "PYTHONHOME=%~dp0venv"
+    set "PYTHONPATH=%~dp0;%~dp0venv\\Lib\\site-packages"
     "%~dp0venv\\python.exe" server\\main.py
     goto :worker_exit
 )
@@ -4409,6 +4411,8 @@ if exist "%~dp0venv\\Scripts\\pythonw.exe" (
 )
 
 if exist "%~dp0venv\\pythonw.exe" (
+    set "PYTHONHOME=%~dp0venv"
+    set "PYTHONPATH=%~dp0;%~dp0venv\\Lib\\site-packages"
     start "" "%~dp0venv\\pythonw.exe" server\\main.py
     exit /b 0
 )
