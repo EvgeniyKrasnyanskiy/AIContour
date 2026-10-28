@@ -483,9 +483,22 @@ class QueueManager:
 
         try:
             # 1. Загрузка DICOM архива на воркер
+            worker_options = dict(job.options)
+            # Автоматически синхронизируем лицензию TotalSegmentator с Мастера на удаленный узел
+            lic = getattr(self.engine, "licenses", "").strip()
+            if not lic:
+                try:
+                    lic_path = Path("config/licenses.json")
+                    if lic_path.exists():
+                        lic = json.loads(lic_path.read_text(encoding="utf-8")).get("license_key", "").strip()
+                except Exception:
+                    pass
+            if lic:
+                worker_options["license_key"] = lic
+
             with open(dicom_zip, "rb") as f_in:
                 files = {"file": ("dicom_input.zip", f_in, "application/zip")}
-                data = {"job_id": job.job_id, "options": json.dumps(job.options)}
+                data = {"job_id": job.job_id, "options": json.dumps(worker_options)}
                 resp = requests.post(f"{worker.url}/api/worker/execute", files=files, data=data, timeout=30.0)
 
             if resp.status_code != 200:

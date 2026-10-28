@@ -108,7 +108,37 @@ class WorkerExecutionManager:
                 with self.lock:
                     self.active_process = p
 
-            # 3. Запуск TotalSegmentator через ContourEngine (автовыбор GPU при наличии)
+            # 3. Автоматическое применение лицензии от Мастера для суб-моделей (головной мозг и др.)
+            lic_key = options.get("license_key", "").strip()
+            if lic_key:
+                self.engine.licenses = lic_key
+                try:
+                    # Сохраняем локально в config/licenses.json на воркере
+                    lic_file = Path("config/licenses.json").resolve()
+                    lic_file.parent.mkdir(parents=True, exist_ok=True)
+                    lic_file.write_text(json.dumps({"license_key": lic_key}, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+                try:
+                    # Записываем в конфигурацию TotalSegmentator для CLI-процессов
+                    from totalsegmentator.libs import get_totalseg_dir
+                    totalseg_dir = get_totalseg_dir()
+                    totalseg_dir.mkdir(parents=True, exist_ok=True)
+                    totalseg_cfg = totalseg_dir / "config.json"
+                    cfg = {}
+                    if totalseg_cfg.exists():
+                        try:
+                            with open(totalseg_cfg, "r", encoding="utf-8") as f:
+                                cfg = json.load(f)
+                        except Exception:
+                            pass
+                    cfg["license_number"] = lic_key
+                    with open(totalseg_cfg, "w", encoding="utf-8") as f:
+                        json.dump(cfg, f, indent=4)
+                    logger.info(f"Лицензия TotalSegmentator успешно синхронизирована с Мастером ({lic_key[:6]}***).")
+                except Exception as le:
+                    logger.debug(f"Не удалось записать переданную лицензию в config TotalSegmentator: {le}")
+
             preset_name = options.get("preset_name", "Все")
             precision_mode = options.get("precision_mode", "normal")
             selected_organs = options.get("selected_organs")
