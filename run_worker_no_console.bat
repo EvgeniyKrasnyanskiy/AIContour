@@ -20,6 +20,11 @@ if exist "%~dp0venv\Scripts\pythonw.exe" (
 )
 
 if exist "%~dp0venv\pythonw.exe" (
+    if exist "%~dp0venv\Lib\site-packages\dataclasses.py" del /f /q "%~dp0venv\Lib\site-packages\dataclasses.py" >nul 2>&1
+    if exist "%~dp0venv\Lib\site-packages\dataclasses-0.6.dist-info" rd /s /q "%~dp0venv\Lib\site-packages\dataclasses-0.6.dist-info" >nul 2>&1
+    if exist "%~dp0venv\Lib\site-packages\argparse.py" del /f /q "%~dp0venv\Lib\site-packages\argparse.py" >nul 2>&1
+    set "PYTHONHOME=%~dp0venv"
+    set "PYTHONPATH=%~dp0;%~dp0venv\Lib;%~dp0venv\Lib\site-packages"
     start "" "%~dp0venv\pythonw.exe" server\main.py
     exit /b 0
 )

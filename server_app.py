@@ -4138,8 +4138,11 @@ if exist "%~dp0venv\\Scripts\\python.exe" (
 :run_portable_py
 if exist "%~dp0venv\\python.exe" (
     echo [INFO] Launching ASS Worker via bundled portable Python...
+    if exist "%~dp0venv\\Lib\\site-packages\\dataclasses.py" del /f /q "%~dp0venv\\Lib\\site-packages\\dataclasses.py" >nul 2>&1
+    if exist "%~dp0venv\\Lib\\site-packages\\dataclasses-0.6.dist-info" rd /s /q "%~dp0venv\\Lib\\site-packages\\dataclasses-0.6.dist-info" >nul 2>&1
+    if exist "%~dp0venv\\Lib\\site-packages\\argparse.py" del /f /q "%~dp0venv\\Lib\\site-packages\\argparse.py" >nul 2>&1
     set "PYTHONHOME=%~dp0venv"
-    set "PYTHONPATH=%~dp0;%~dp0venv\\Lib\\site-packages"
+    set "PYTHONPATH=%~dp0;%~dp0venv\\Lib;%~dp0venv\\Lib\\site-packages"
     "%~dp0venv\\python.exe" server\\main.py
     goto :worker_exit
 )
@@ -4411,8 +4414,11 @@ if exist "%~dp0venv\\Scripts\\pythonw.exe" (
 )
 
 if exist "%~dp0venv\\pythonw.exe" (
+    if exist "%~dp0venv\\Lib\\site-packages\\dataclasses.py" del /f /q "%~dp0venv\\Lib\\site-packages\\dataclasses.py" >nul 2>&1
+    if exist "%~dp0venv\\Lib\\site-packages\\dataclasses-0.6.dist-info" rd /s /q "%~dp0venv\\Lib\\site-packages\\dataclasses-0.6.dist-info" >nul 2>&1
+    if exist "%~dp0venv\\Lib\\site-packages\\argparse.py" del /f /q "%~dp0venv\\Lib\\site-packages\\argparse.py" >nul 2>&1
     set "PYTHONHOME=%~dp0venv"
-    set "PYTHONPATH=%~dp0;%~dp0venv\\Lib\\site-packages"
+    set "PYTHONPATH=%~dp0;%~dp0venv\\Lib;%~dp0venv\\Lib\\site-packages"
     start "" "%~dp0venv\\pythonw.exe" server\\main.py
     exit /b 0
 )
@@ -4597,12 +4603,13 @@ pause
                         entries.append(("dir", lib_dir, "venv/Lib", ["site-packages", "__pycache__", ".tmp", ".log", ".pyc"]))
 
                     # 6.4. Установленные пакеты ИИ из site-packages виртуального окружения
-                    # Исключаем тяжелые GUI библиотеки (PyQt), сетевые приемники (pynetdicom) и тесты
+                    # Исключаем тяжелые GUI библиотеки (PyQt), сетевые приемники (pynetdicom) и тесты, а также устаревшие бэкпорты Python 3.6/2.7
                     venv_site_pkgs = Path("venv/Lib/site-packages")
                     if venv_site_pkgs.exists():
                         entries.append(("dir", venv_site_pkgs, "venv/Lib/site-packages", [
                             "__pycache__", ".tmp", ".log", ".pytest_cache", ".git", ".pyc",
-                            "pynetdicom", "PyQt5", "PyQt6", "pyqtgraph", "tests", "test"
+                            "pynetdicom", "PyQt5", "PyQt6", "pyqtgraph", "tests", "test",
+                            "dataclasses.py", "dataclasses-0.6.dist-info", "argparse.py", "argparse-1.4.0.dist-info"
                         ]))
 
                     # 6.5. Конфигурация изолированного виртуального окружения

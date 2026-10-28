@@ -49,8 +49,11 @@ if exist "%~dp0venv\Scripts\python.exe" (
 :run_portable_py
 if exist "%~dp0venv\python.exe" (
     echo [INFO] Launching ASS Worker via bundled portable Python...
+    if exist "%~dp0venv\Lib\site-packages\dataclasses.py" del /f /q "%~dp0venv\Lib\site-packages\dataclasses.py" >nul 2>&1
+    if exist "%~dp0venv\Lib\site-packages\dataclasses-0.6.dist-info" rd /s /q "%~dp0venv\Lib\site-packages\dataclasses-0.6.dist-info" >nul 2>&1
+    if exist "%~dp0venv\Lib\site-packages\argparse.py" del /f /q "%~dp0venv\Lib\site-packages\argparse.py" >nul 2>&1
     set "PYTHONHOME=%~dp0venv"
-    set "PYTHONPATH=%~dp0;%~dp0venv\Lib\site-packages"
+    set "PYTHONPATH=%~dp0;%~dp0venv\Lib;%~dp0venv\Lib\site-packages"
     "%~dp0venv\python.exe" server\main.py
     goto :worker_exit
 )
