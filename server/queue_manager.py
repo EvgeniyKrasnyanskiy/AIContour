@@ -539,6 +539,7 @@ class QueueManager:
             if dl_res.status_code != 200:
                 raise RuntimeError(f"Не удалось получить результат от воркера '{worker.name}': код {dl_res.status_code}")
 
+            job_dir.mkdir(parents=True, exist_ok=True)
             result_zip_path = job_dir / "result.zip"
             with open(result_zip_path, "wb") as f_out:
                 f_out.write(dl_res.content)
