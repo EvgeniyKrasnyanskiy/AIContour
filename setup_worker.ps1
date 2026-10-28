@@ -112,6 +112,17 @@ if (Test-Path (Join-Path $scriptDir "requirements.txt")) {
 }
 
 Write-Host ""
+Write-Host "[INFO] Validating installed packages..." -ForegroundColor Cyan
+$checkInstalled = & $venvPy -c "import totalsegmentator, fastapi, uvicorn; print('ALL_PACKAGES_READY')" 2>&1
+if ($LASTEXITCODE -ne 0 -or $checkInstalled -notmatch "ALL_PACKAGES_READY") {
+    Write-Host ""
+    Write-Host "[ERROR] Dependency installation was not completed successfully!" -ForegroundColor Red
+    Write-Host "Details: $checkInstalled" -ForegroundColor Yellow
+    if (-not $Auto) { Read-Host "Press Enter to exit..." }
+    exit 1
+}
+
+Write-Host ""
 Write-Host "======================================================================" -ForegroundColor Green
 Write-Host "  Worker environment setup completed successfully!" -ForegroundColor Green
 Write-Host "  You can now launch: run_worker.bat" -ForegroundColor Green

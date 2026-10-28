@@ -4326,6 +4326,17 @@ if (Test-Path $reqPath) {
 }
 
 Write-Host ""
+Write-Host "[INFO] Validating installed packages..." -ForegroundColor Cyan
+$checkInstalled = & $venvPy -c "import totalsegmentator, fastapi, uvicorn; print('ALL_PACKAGES_READY')" 2>&1
+if ($LASTEXITCODE -ne 0 -or $checkInstalled -notmatch "ALL_PACKAGES_READY") {
+    Write-Host ""
+    Write-Host "[ERROR] Dependency installation was not completed successfully!" -ForegroundColor Red
+    Write-Host "Details: $checkInstalled" -ForegroundColor Yellow
+    if (-not $Auto) { Read-Host "Press Enter to exit..." }
+    exit 1
+}
+
+Write-Host ""
 Write-Host "======================================================================" -ForegroundColor Green
 Write-Host "  Worker environment setup completed successfully!" -ForegroundColor Green
 Write-Host "  You can now launch: run_worker.bat" -ForegroundColor Green
@@ -4525,7 +4536,16 @@ pause
                 for root_file in ["version.py", "version.txt", "requirements.txt", "contour_engine.py", "config.py"]:
                     p = Path(root_file)
                     if p.exists():
-                        entries.append(("file", p, root_file))
+                        if root_file == "requirements.txt":
+                            # Для воркера исключаем ненужные GUI и сетевые библиотеки, вызывающие конфликты прав на Windows
+                            raw_lines = p.read_text(encoding="utf-8").splitlines()
+                            filtered = [
+                                line for line in raw_lines
+                                if not any(k in line.lower() for k in ["pynetdicom", "pyqt5", "pyqt6"])
+                            ]
+                            entries.append(("data", ("\n".join(filtered) + "\n").encode("utf-8"), "requirements.txt"))
+                        else:
+                            entries.append(("file", p, root_file))
 
                 # 5. Веса TotalSegmentator (автономная работа без интернета)
                 if include_models:
