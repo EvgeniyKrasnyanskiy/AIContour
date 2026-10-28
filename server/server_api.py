@@ -177,15 +177,16 @@ def on_app_startup():
             if not master_url:
                 logger.error("[КРИТИЧЕСКАЯ ОШИБКА] Не указан master_url в config/server_settings.ini! Воркер не знает, к какому Мастер-серверу подключаться. Добавьте в config/server_settings.ini: master_url = http://<IP_МАСТЕРА>:8000")
             else:
+                w_port = int(os.environ.get("ASS_WORKER_PORT") or os.environ.get("ASS_PORT") or cfg.get("General", "port", fallback="8000"))
                 worker_client_thread = WorkerClientThread(
                     worker_id=worker_id,
                     name=worker_name,
                     master_url=master_url,
-                    port=8000,
+                    port=w_port,
                     exec_mgr=worker_exec_mgr
                 )
                 worker_client_thread.start()
-                logger.info(f"Сервер запущен в режиме WORKER. Имя узла: '{worker_name}', Мастер: '{master_url}'.")
+                logger.info(f"Сервер запущен в режиме WORKER. Имя узла: '{worker_name}' (порт: {w_port}), Мастер: '{master_url}'.")
     except Exception as e:
         logger.warning(f"Не удалось инициализировать режим воркера на старте: {e}")
 

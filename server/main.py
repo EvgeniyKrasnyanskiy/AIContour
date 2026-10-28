@@ -52,18 +52,23 @@ from server.server_api import app
 
 if __name__ == "__main__":
     host = "0.0.0.0"
-    port = 8000
+    port = int(os.environ.get("ASS_WORKER_PORT") or os.environ.get("ASS_PORT") or os.environ.get("PORT") or 8000)
     
     import configparser
     ini_path = Path(__file__).resolve().parent.parent / "config" / "server_settings.ini"
     role = os.environ.get("ASS_CLUSTER_ROLE", "").strip().lower()
-    if not role and ini_path.exists():
+    if ini_path.exists():
         try:
             cfg = configparser.ConfigParser()
             cfg.read(ini_path, encoding="utf-8")
-            role = cfg.get("General", "cluster_role", fallback="master").strip().lower()
+            if not role:
+                role = cfg.get("General", "cluster_role", fallback="master").strip().lower()
+            if not os.environ.get("ASS_WORKER_PORT") and not os.environ.get("ASS_PORT") and not os.environ.get("PORT"):
+                if "General" in cfg and "port" in cfg["General"]:
+                    port = int(cfg.get("General", "port", fallback=str(port)))
         except Exception:
-            role = "master"
+            if not role:
+                role = "master"
     if not role:
         role = "master"
 

@@ -4082,6 +4082,7 @@ cluster_role=worker
 worker_id={w_id}
 worker_name={w_name}
 master_url={m_url}
+port=8000
 temp_dir=
 """
                 run_bat_text = f"""@echo off
@@ -4097,6 +4098,7 @@ set ASS_CLUSTER_ROLE=worker
 set ASS_MASTER_URL={m_url}
 set ASS_WORKER_NAME={w_name}
 set ASS_WORKER_ID={w_id}
+set ASS_WORKER_PORT=8000
 
 echo ======================================================================
 echo   ASS (Auto Segmentation System) - Compute Worker Node
