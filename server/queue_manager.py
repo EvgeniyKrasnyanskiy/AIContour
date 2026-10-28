@@ -543,13 +543,29 @@ class QueueManager:
             with open(result_zip_path, "wb") as f_out:
                 f_out.write(dl_res.content)
 
-            # 4. Команда воркеру на мгновенное удаление рабочих данных пациента
+            # 4. Подсчет реально созданных структур из полученного RTSTRUCT
+            remote_added_count = 0
+            try:
+                import pydicom
+                import io
+                with zipfile.ZipFile(result_zip_path, 'r') as rz:
+                    for name in rz.namelist():
+                        if name.lower().endswith('.dcm'):
+                            with rz.open(name) as dcm_f:
+                                ds = pydicom.dcmread(io.BytesIO(dcm_f.read()), stop_before_pixels=True)
+                                if hasattr(ds, "StructureSetROISequence"):
+                                    remote_added_count = len(ds.StructureSetROISequence)
+                                    break
+            except Exception as e:
+                logger.warning(f"Не удалось подсчитать ROI из RTSTRUCT воркера: {e}")
+
+            # 5. Команда воркеру на мгновенное удаление рабочих данных пациента
             try:
                 requests.post(f"{worker.url}/api/worker/cleanup/{job.job_id}", timeout=5.0)
             except Exception:
                 pass
 
-            # 5. Успешное завершение на Мастере
+            # 6. Успешное завершение на Мастере
             with self.lock:
                 job.status = "SUCCESS"
                 job.progress = 100
@@ -558,7 +574,7 @@ class QueueManager:
                 if job.started_at:
                     job.elapsed_seconds = job.completed_at - job.started_at
                 job.eta_seconds = 0.0
-                job.current_step = f"Успешно выполнено узлом '{worker.name}'!"
+                job.current_step = f"Успешно выполнено узлом '{worker.name}'! Создано OAR: {remote_added_count}"
                 worker.jobs_completed += 1
 
             # Очистка исходных файлов на мастере
@@ -568,7 +584,7 @@ class QueueManager:
             try:
                 self.stats_mgr.record_job(
                     preset_name=job.options.get("preset_name", "Все"),
-                    organs_count=0,
+                    organs_count=remote_added_count,
                     elapsed_time=job.elapsed_seconds,
                     patient_name=job.patient_name,
                     patient_id=job.patient_id,
