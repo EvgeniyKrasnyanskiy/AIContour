@@ -231,6 +231,8 @@ class ClusterManager:
                 node.ram_total_mb = float(data["ram_total_mb"])
             if "cpu_percent" in data:
                 node.cpu_percent = float(data["cpu_percent"])
+            if "device" in data:
+                node.device = str(data["device"])
             return True
 
     def unregister_worker(self, worker_id: str) -> bool:

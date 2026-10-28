@@ -108,12 +108,18 @@ class WorkerExecutionManager:
                 with self.lock:
                     self.active_process = p
 
-            # 3. Запуск TotalSegmentator через ContourEngine (на CPU воркера)
+            # 3. Запуск TotalSegmentator через ContourEngine (автовыбор GPU при наличии)
             preset_name = options.get("preset_name", "Все")
             precision_mode = options.get("precision_mode", "normal")
             remove_blobs = options.get("remove_blobs", options.get("clean_blobs", False))
             smoothing_sigma = float(options.get("smoothing_sigma", 0.0))
-            use_gpu = (options.get("device", "CPU") == "GPU")
+
+            if "device" in options and options.get("device"):
+                use_gpu = (options.get("device") == "GPU")
+            else:
+                use_gpu = self.engine.is_gpu_available()
+
+            logger.info(f"Воркер выбрал устройство для задачи {job_id}: {'GPU' if use_gpu else 'CPU'}")
 
             added_count, elapsed_time = self.engine.run_pipeline(
                 dicom_dir_path=str(extracted_dicom),
@@ -217,11 +223,20 @@ class WorkerClientThread(threading.Thread):
                         time.sleep(3.0)
                         continue
 
-                # Сбор системных метрик
+                # Сбор системных метрик и обнаружение GPU
                 mem = psutil.virtual_memory()
                 ram_used_mb = mem.used / (1024 * 1024)
                 ram_total_mb = mem.total / (1024 * 1024)
                 cpu_percent = psutil.cpu_percent(interval=None)
+
+                device_desc = "CPU"
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        gpu_name = torch.cuda.get_device_name(0)
+                        device_desc = f"GPU ({gpu_name})"
+                except Exception:
+                    pass
 
                 # 2. Регистрация на Мастере (если еще не зарегистрирован)
                 if not self.is_registered:
@@ -229,7 +244,7 @@ class WorkerClientThread(threading.Thread):
                         "worker_id": self.worker_id,
                         "name": self.name,
                         "port": self.port,
-                        "device": "CPU",
+                        "device": device_desc,
                         "ram_used_mb": ram_used_mb,
                         "ram_total_mb": ram_total_mb,
                         "cpu_percent": cpu_percent,
@@ -239,7 +254,7 @@ class WorkerClientThread(threading.Thread):
                         r = requests.post(f"{self.master_url}/api/cluster/register", json=reg_payload, timeout=4.0)
                         if r.status_code == 200:
                             self.is_registered = True
-                            logger.info(f"Воркер успешно зарегистрирован на Мастере {self.master_url}.")
+                            logger.info(f"Воркер успешно зарегистрирован на Мастере {self.master_url} [Устройство: {device_desc}].")
                         else:
                             time.sleep(3.0)
                             continue
@@ -251,6 +266,7 @@ class WorkerClientThread(threading.Thread):
                 # 3. Отправка регулярного Heartbeat
                 hb_payload = {
                     "worker_id": self.worker_id,
+                    "device": device_desc,
                     "ram_used_mb": ram_used_mb,
                     "ram_total_mb": ram_total_mb,
                     "cpu_percent": cpu_percent
