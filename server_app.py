@@ -4331,7 +4331,13 @@ if (Test-Path $reqPath) {
 
 Write-Host ""
 Write-Host "[INFO] Validating installed packages..." -ForegroundColor Cyan
-$checkInstalled = & $venvPy -c "import totalsegmentator, fastapi, uvicorn; print('ALL_PACKAGES_READY')" 2>&1
+$checkInstalled = & $venvPy -c "import totalsegmentator, nnunetv2, seaborn, fastapi, uvicorn; print('ALL_PACKAGES_READY')" 2>&1
+if ($LASTEXITCODE -ne 0 -or $checkInstalled -notmatch "ALL_PACKAGES_READY") {
+    Write-Host "[INFO] Installing remaining required dependencies..." -ForegroundColor Yellow
+    & $venvPip install seaborn fastapi uvicorn nnunetv2 totalsegmentator
+    $checkInstalled = & $venvPy -c "import totalsegmentator, nnunetv2, seaborn, fastapi, uvicorn; print('ALL_PACKAGES_READY')" 2>&1
+}
+
 if ($LASTEXITCODE -ne 0 -or $checkInstalled -notmatch "ALL_PACKAGES_READY") {
     Write-Host ""
     Write-Host "[ERROR] Dependency installation was not completed successfully!" -ForegroundColor Red
