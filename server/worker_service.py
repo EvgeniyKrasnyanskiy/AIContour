@@ -169,7 +169,7 @@ class WorkerExecutionManager:
                 
             with self.lock:
                 self.progress = 100
-                self.current_step = f"Успешно завершено! Структур: {added_count}."
+                self.current_step = f"Успешно завершено! Создано OAR: {added_count}."
                 self.last_result_zip = result_zip_path
                 self.status = "IDLE"
                 
