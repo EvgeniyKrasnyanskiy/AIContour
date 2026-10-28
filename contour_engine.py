@@ -1493,7 +1493,12 @@ class ContourEngine:
                                         txt = f"Шаг 2/5: Загрузка весов ИИ-модели из сети ({download_task_info}) {sub_percent}%..."
                                         progress_callback(5, txt)
                                 else:
-                                    total_units = (max_parts + 1) * total_tasks
+                                    # Автодетекция перехода к следующей части нейросети, если tqdm сбросился в 0 после завершения предыдущей
+                                    if last_reported_pct >= 90 and sub_percent < 20:
+                                        current_loop_index += 1
+                                        max_parts = max(max_parts, current_loop_index)
+
+                                    total_units = max(1, (max_parts + 1) * total_tasks)
                                     current_unit = (task_index - 1) * (max_parts + 1) + current_loop_index
                                     global_ai_percent = 10 + int((current_unit * 100 + sub_percent) / (total_units * 100) * 80)
                                     global_ai_percent = min(90, max(5, global_ai_percent))
@@ -1501,7 +1506,7 @@ class ContourEngine:
                                     if current_loop_index == 0:
                                         txt = f"Шаг 2/5: ИИ определяет границы тела (Задача {task_index}/{total_tasks}: {task_name}) {sub_percent}%..."
                                     else:
-                                        txt = f"Шаг 2/5: ИИ оконтуривает структуры (Задача {task_index}/{total_tasks}: {task_name}). Расчет части {current_loop_index} из {max_parts} ({sub_percent}%)..."
+                                        txt = f"Шаг 2/5: ИИ оконтуривает структуры (Задача {task_index}/{total_tasks}: {task_name}). Расчет части {current_loop_index} ({sub_percent}%)..."
                                     
                                     if progress_callback and sub_percent != last_reported_pct:
                                         last_reported_pct = sub_percent
