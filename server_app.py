@@ -4094,6 +4094,9 @@ set HTTP_PROXY=
 set HTTPS_PROXY=
 set NO_PROXY=*
 set ASS_CLUSTER_ROLE=worker
+set ASS_MASTER_URL={m_url}
+set ASS_WORKER_NAME={w_name}
+set ASS_WORKER_ID={w_id}
 
 echo ======================================================================
 echo   ASS (Auto Segmentation System) - Compute Worker Node
@@ -4385,6 +4388,9 @@ set HTTP_PROXY=
 set HTTPS_PROXY=
 set NO_PROXY=*
 set ASS_CLUSTER_ROLE=worker
+set ASS_MASTER_URL={m_url}
+set ASS_WORKER_NAME={w_name}
+set ASS_WORKER_ID={w_id}
 
 if exist "%~dp0totalseg_home\\nnunet" (
     set "TOTALSEG_HOME_DIR=%~dp0totalseg_home"

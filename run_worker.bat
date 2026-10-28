@@ -8,6 +8,9 @@ set HTTP_PROXY=
 set HTTPS_PROXY=
 set NO_PROXY=*
 set ASS_CLUSTER_ROLE=worker
+if not defined ASS_MASTER_URL set ASS_MASTER_URL=http://192.168.5.195:8000
+if not defined ASS_WORKER_NAME set ASS_WORKER_NAME=Worker-01
+if not defined ASS_WORKER_ID set ASS_WORKER_ID=worker_01
 
 echo ======================================================================
 echo   ASS (Auto Segmentation System) - Compute Worker Node
