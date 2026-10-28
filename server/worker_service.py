@@ -111,6 +111,8 @@ class WorkerExecutionManager:
             # 3. Запуск TotalSegmentator через ContourEngine (автовыбор GPU при наличии)
             preset_name = options.get("preset_name", "Все")
             precision_mode = options.get("precision_mode", "normal")
+            selected_organs = options.get("selected_organs")
+            merge_mode = options.get("merge_mode", "merge")
             remove_blobs = options.get("remove_blobs", options.get("clean_blobs", False))
             smoothing_sigma = float(options.get("smoothing_sigma", 0.0))
 
@@ -119,13 +121,33 @@ class WorkerExecutionManager:
             else:
                 use_gpu = self.engine.is_gpu_available()
 
+            # Поиск существующего RTSTRUCT для merge-режима
+            existing_rtstruct = None
+            try:
+                import pydicom
+                for f in extracted_dicom.rglob("*.dcm"):
+                    try:
+                        ds = pydicom.dcmread(str(f), stop_before_pixels=True)
+                        if getattr(ds, "Modality", "") == "RTSTRUCT":
+                            existing_rtstruct = str(f)
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
             logger.info(f"Воркер выбрал устройство для задачи {job_id}: {'GPU' if use_gpu else 'CPU'}")
+            if selected_organs:
+                logger.info(f"Воркер передает целевые органы задачи: {selected_organs}")
 
             added_count, elapsed_time = self.engine.run_pipeline(
                 dicom_dir_path=str(extracted_dicom),
                 output_dir_path=str(output_workspace),
                 preset_name=preset_name,
                 precision_mode=precision_mode,
+                selected_organs=selected_organs,
+                merge_mode=merge_mode,
+                existing_rtstruct_path=existing_rtstruct,
                 use_gpu=use_gpu,
                 remove_blobs=remove_blobs,
                 smoothing_sigma=smoothing_sigma,

@@ -1152,18 +1152,6 @@ class ContourEngine:
             
             segmentation_dir.mkdir(parents=True, exist_ok=True)
             
-            # Получаем выбранные органы
-            if selected_organs is not None:
-                target_organs = selected_organs
-                logger.info(f"ИИ сегментирует только выбранные OAR: {target_organs}")
-            else:
-                target_organs = self.presets.get(preset_name)
-                if target_organs:
-                    logger.info(f"ИИ сегментирует только выбранные OAR из пресета '{preset_name}': {target_organs}")
-                else:
-                    logger.warning(f"Пресет '{preset_name}' не найден. Будут экспортированы все найденные OAR.")
-                    target_organs = None
-            
             # ---- АДАПТАЦИЯ И РАЗДЕЛЕНИЕ ОРГАНОВ ПО ЗАДАЧАМ ----
             # Получаем список органов только базовой модели (total) — для валидации фолбэков
             total_supported = set()
@@ -1175,6 +1163,30 @@ class ContourEngine:
             except Exception as e:
                 logger.warning(f"Не удалось динамически получить список классов TotalSegmentator: {e}. Резервный набор.")
                 total_supported = set(self.colors.keys())
+
+            # Получаем выбранные органы
+            if selected_organs is not None and len(selected_organs) > 0:
+                target_organs = selected_organs
+                logger.info(f"ИИ сегментирует только выбранные OAR ({len(target_organs)} шт.): {target_organs}")
+            else:
+                target_organs = self.presets.get(preset_name)
+                if target_organs:
+                    logger.info(f"ИИ сегментирует только выбранные OAR из пресета '{preset_name}': {target_organs}")
+                else:
+                    # Попробуем найти пресет по подстроке (например 'thoracic_oar' -> 'Грудная клетка (Thorax)')
+                    matched_preset = None
+                    p_clean = preset_name.lower().replace("_", " ")
+                    for pr_k, pr_v in self.presets.items():
+                        k_clean = pr_k.lower()
+                        if p_clean in k_clean or ("thorac" in p_clean and "thorax" in k_clean) or ("pelvis" in p_clean and "таз" in k_clean):
+                            matched_preset = pr_v
+                            logger.info(f"Пресет '{preset_name}' автоматически сопоставлен с '{pr_k}': {len(pr_v)} органов.")
+                            break
+                    if matched_preset:
+                        target_organs = matched_preset
+                    else:
+                        logger.warning(f"Пресет '{preset_name}' не найден. Будут экспортированы все поддерживаемые OAR ({len(total_supported)} шт.).")
+                        target_organs = list(total_supported) if total_supported else list(self.colors.keys())
 
             # Карта виртуальных органов, которые мы можем собрать из долей/частей
             VIRTUAL_ORGANS_MAP = {
