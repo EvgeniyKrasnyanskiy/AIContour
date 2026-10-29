@@ -63,3 +63,8 @@ ASS_ToDo.txt
 # Локальные дистрибутивы обновлений
 updates/
 config/registered_workers.json
+
+# Вычислительные воркеры и их архивы
+Workers/
+config/worker_settings.ini
+

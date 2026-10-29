@@ -3557,9 +3557,9 @@ if PYQT_AVAILABLE:
             # Инициализация и добавление компактной таблицы очереди
             self.table_queue = QueueTableWidget(self)
             self.table_queue.parent_app = self
-            self.table_queue.setColumnCount(7)
+            self.table_queue.setColumnCount(8)
             self.table_queue.setHorizontalHeaderLabels([
-                "Клиент", "Пациент", "ID Пациента", "Пресет", "Статус", "Прогресс", "Получено"
+                "Клиент", "Пациент", "ID Пациента", "Пресет", "Статус", "Прогресс", "Время", "Получено"
             ])
             self.table_queue.setMinimumHeight(95)  # Идеальный минимальный компактный размер для шапки + 2 строк!
             
@@ -3572,6 +3572,7 @@ if PYQT_AVAILABLE:
             header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
             header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
             header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
             
             self.table_queue.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             self.table_queue.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -7474,7 +7475,7 @@ version = {sys.version.split()[0]}
             self.combo_cluster_policy.addItem("Приоритет воркеров (Рекомендуется для 16 GB CPU)", "offload_workers")
             self.combo_cluster_policy.addItem("Выделенный координатор (Мастер только диспетчер)", "dedicated_coordinator")
             self.combo_cluster_policy.addItem("Первый свободный узел", "first_available")
-            self.combo_cluster_policy.addItem("Только сервер", "server_only")
+            self.combo_cluster_policy.addItem("Только мастер-сервер", "server_only")
             
             # Восстанавливаем сохранённое значение при создании виджета
             saved_pol = self.settings.value("dispatch_policy", "offload_workers")
@@ -8364,7 +8365,30 @@ version = {sys.version.split()[0]}
                     prog_text = f"{item['progress']}%" if item["status"] in ["PROCESSING", "SUCCESS"] else "-"
                     self.table_queue.setItem(row, 5, self.create_table_item(prog_text, centered=True))
                     
-                    self.table_queue.setItem(row, 6, self.create_table_item(item["created_at"], centered=True))
+                    elapsed_sec = item.get("elapsed", 0)
+                    if item["status"] == "PROCESSING":
+                        if elapsed_sec and elapsed_sec > 0:
+                            m, s = divmod(int(elapsed_sec), 60)
+                            time_text = f"⏳ {m:02d}:{s:02d}"
+                        else:
+                            time_text = "⏳ 00:00"
+                    elif item["status"] in ["SUCCESS", "FAILED", "CANCELLED"]:
+                        if elapsed_sec and elapsed_sec > 0:
+                            m, s = divmod(int(elapsed_sec), 60)
+                            time_text = f"{m:02d}:{s:02d}"
+                        else:
+                            time_text = "—"
+                    else:
+                        time_text = "—"
+
+                    time_item = self.create_table_item(time_text, centered=True)
+                    if item["status"] == "PROCESSING":
+                        time_item.setForeground(QBrush(QColor("#3498db")))
+                    elif item["status"] == "SUCCESS" and time_text != "—":
+                        time_item.setForeground(QBrush(QColor("#2ecc71")))
+                    self.table_queue.setItem(row, 6, time_item)
+                    
+                    self.table_queue.setItem(row, 7, self.create_table_item(item["created_at"], centered=True))
                     self.table_queue.item(row, 0).setData(Qt.ItemDataRole.UserRole, item["job_id"])
                     
                 # Прогресс-бар и ETA

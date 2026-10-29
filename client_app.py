@@ -2774,9 +2774,9 @@ if PYQT_AVAILABLE:
 
             # Инициализация и добавление компактной таблицы очереди (симметрично серверу)
             self.table_queue = QTableWidget()
-            self.table_queue.setColumnCount(7)
+            self.table_queue.setColumnCount(8)
             self.table_queue.setHorizontalHeaderLabels([
-                "Клиент", "Пациент", "ID Пациента", "Пресет", "Статус", "Прогресс", "Получено"
+                "Клиент", "Пациент", "ID Пациента", "Пресет", "Статус", "Прогресс", "Время", "Получено"
             ])
             self.table_queue.setMinimumHeight(95)  # Идеальный минимальный компактный размер для шапки + 2 строк!
             
@@ -2789,6 +2789,7 @@ if PYQT_AVAILABLE:
             header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
             header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
             header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
             
             self.table_queue.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             self.table_queue.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -6344,8 +6345,32 @@ if PYQT_AVAILABLE:
                     prog_text = f"{item['progress']}%" if item["status"] in ["PROCESSING", "SUCCESS"] else "-"
                     self.table_queue.setItem(row, 5, self.create_table_item(prog_text, centered=True))
                     
-                    # Время
-                    self.table_queue.setItem(row, 6, self.create_table_item(item["created_at"], centered=True))
+                    # Длительность расчёта (Время mm:ss)
+                    elapsed_sec = item.get("elapsed", 0)
+                    if item["status"] == "PROCESSING":
+                        if elapsed_sec and elapsed_sec > 0:
+                            m, s = divmod(int(elapsed_sec), 60)
+                            time_text = f"⏳ {m:02d}:{s:02d}"
+                        else:
+                            time_text = "⏳ 00:00"
+                    elif item["status"] in ["SUCCESS", "FAILED", "CANCELLED"]:
+                        if elapsed_sec and elapsed_sec > 0:
+                            m, s = divmod(int(elapsed_sec), 60)
+                            time_text = f"{m:02d}:{s:02d}"
+                        else:
+                            time_text = "—"
+                    else:
+                        time_text = "—"
+
+                    time_item = self.create_table_item(time_text, centered=True)
+                    if item["status"] == "PROCESSING":
+                        time_item.setForeground(QBrush(QColor("#3498db")))
+                    elif item["status"] == "SUCCESS" and time_text != "—":
+                        time_item.setForeground(QBrush(QColor("#2ecc71")))
+                    self.table_queue.setItem(row, 6, time_item)
+
+                    # Получено (время создания)
+                    self.table_queue.setItem(row, 7, self.create_table_item(item["created_at"], centered=True))
                     
                     # Сохраняем job_id в кастомную роль
                     self.table_queue.item(row, 0).setData(Qt.ItemDataRole.UserRole, item["job_id"])
