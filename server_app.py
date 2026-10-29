@@ -27,10 +27,9 @@ import argparse
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
-import pyqtgraph as pg
-import numpy as np
-import pydicom
+from typing import Dict, List, Optional, Any
+_early_app = None
+_early_splash = None
 
 # Импорт PyQt6
 try:
@@ -70,11 +69,59 @@ try:
 except ImportError:
     PYQT_AVAILABLE = False
 
+if __name__ == "__main__" and PYQT_AVAILABLE:
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ASS.Server.1.0")
+        except Exception:
+            pass
+
+        # Защита от запуска второй копии программы (используем мьютекс Windows)
+        try:
+            _mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "ASSServerMutex_1.0")
+            if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+                _tmp_app = QApplication.instance() or QApplication(sys.argv)
+                QMessageBox.warning(None, "Ошибка запуска", "Программа уже запущена!")
+                sys.exit(0)
+        except Exception:
+            pass
+
+        _early_app = QApplication.instance() or QApplication(sys.argv)
+        _early_app.setStyle("Fusion")
+
+        _base_dir = os.path.dirname(os.path.abspath(__file__))
+        for _icon_name in ["icon_server.ico", "icon_server.png", "app_icon.ico", "app_icon.png"]:
+            _icon_path = os.path.join(_base_dir, _icon_name)
+            if os.path.exists(_icon_path):
+                _early_app.setWindowIcon(QIcon(_icon_path))
+                break
+
+        from src.ui.splash import create_splash_screen
+        _early_splash = create_splash_screen(_early_app, is_server=True)
+        _early_splash.set_progress(15, "Запуск графической подсистемы...")
+    except Exception as _e:
+        _early_app = None
+        _early_splash = None
+
+if _early_splash:
+    _early_splash.set_progress(35, "Загрузка математических и DICOM библиотек...")
+
+import pyqtgraph as pg
+import numpy as np
+import pydicom
+
+if _early_splash:
+    _early_splash.set_progress(55, "Загрузка нейросетевых моделей и движка...")
+
 # Импортируем вычислительный движок или используем легковесный заглушечный класс для клиента
 try:
     from contour_engine import ContourEngine
 except ImportError:
     ContourEngine = None
+
+if _early_splash:
+    _early_splash.set_progress(75, "Инициализация интерфейса...")
 
 if ContourEngine is None:
     class MockContourEngine:
@@ -1275,6 +1322,8 @@ if PYQT_AVAILABLE:
                 if r.status_code == 200:
                     clients = r.json()
                     self.populate_table(clients)
+                    any_building = any(c.get("is_building") for c in clients)
+                    self.timer.setInterval(1000 if any_building else 3000)
                 else:
                     logger.warning(f"Не удалось получить список клиентов: {r.status_code}")
             except Exception as e:
@@ -1327,59 +1376,74 @@ if PYQT_AVAILABLE:
                     item_no_up.setForeground(QBrush(QColor("#666666")))
                     self.table.setItem(row, 4, item_no_up)
                 else:
-                    btn_update = QPushButton()
-                    btn_update.setCursor(Qt.CursorShape.PointingHandCursor)
                     is_building = client.get("is_building", False)
                     if is_building:
-                        btn_update.setText("⏳ Сборка exe...")
-                        btn_update.setToolTip(f"Идет фоновая компиляция PyInstaller актуальной версии ({qt_flv}) на сервере...")
-                        btn_update.setEnabled(False)
-                        btn_update.setStyleSheet("""
-                            QPushButton {
-                                background-color: #f39c12;
-                                color: #1e1e1e;
-                                border: none;
+                        b_percent = client.get("build_percent", 0)
+                        b_stage = client.get("build_stage", "")
+                        
+                        pbar = QProgressBar()
+                        pbar.setRange(0, 100)
+                        pbar.setValue(int(b_percent))
+                        pbar.setFixedHeight(24)
+                        pbar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                        
+                        stage_suffix = f" ({b_stage})" if b_stage else ""
+                        pbar.setFormat(f"🔨 {b_percent}%{stage_suffix}")
+                        pbar.setToolTip(f"Идет фоновая компиляция PyInstaller ({qt_flv}). Этап: {b_stage} ({b_percent}%)")
+                        pbar.setStyleSheet("""
+                            QProgressBar {
+                                background-color: #1e1e24;
+                                border: 1px solid #d35400;
                                 border-radius: 4px;
-                                padding: 4px 8px;
+                                text-align: center;
+                                color: #ffffff;
                                 font-size: 11px;
                                 font-weight: bold;
                             }
-                        """)
-                    elif has_pending:
-                        btn_update.setText("⏳ Отправка...")
-                        btn_update.setToolTip("Клиент получил команду на обновление и скачивает актуальный exe-файл...")
-                        btn_update.setEnabled(False)
-                        btn_update.setStyleSheet("""
-                            QPushButton {
-                                background-color: #d35400;
-                                color: white;
-                                border: none;
-                                border-radius: 4px;
-                                padding: 4px 8px;
-                                font-size: 11px;
-                                font-weight: bold;
+                            QProgressBar::chunk {
+                                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #d35400, stop:1 #f39c12);
+                                border-radius: 3px;
                             }
                         """)
+                        self.table.setCellWidget(row, 4, pbar)
                     else:
-                        btn_update.setText("🔄 Обновить клиент")
-                        btn_update.setToolTip(f"Инициировать сборку/отправку актуальной версии клиента ({qt_flv}) по сети.")
-                        btn_update.setEnabled(True)
-                        btn_update.setStyleSheet("""
-                            QPushButton {
-                                background-color: #2980b9;
-                                color: white;
-                                border: none;
-                                border-radius: 4px;
-                                padding: 4px 8px;
-                                font-size: 11px;
-                                font-weight: bold;
-                            }
-                            QPushButton:hover {
-                                background-color: #3498db;
-                            }
-                        """)
-                    btn_update.clicked.connect(lambda checked, cid=client_id, flv=qt_flv: self.trigger_client_update(cid, flv))
-                    self.table.setCellWidget(row, 4, btn_update)
+                        btn_update = QPushButton()
+                        btn_update.setCursor(Qt.CursorShape.PointingHandCursor)
+                        if has_pending:
+                            btn_update.setText("⏳ Отправка...")
+                            btn_update.setToolTip("Клиент получил команду на обновление и скачивает актуальный exe-файл...")
+                            btn_update.setEnabled(False)
+                            btn_update.setStyleSheet("""
+                                QPushButton {
+                                    background-color: #d35400;
+                                    color: white;
+                                    border: none;
+                                    border-radius: 4px;
+                                    padding: 4px 8px;
+                                    font-size: 11px;
+                                    font-weight: bold;
+                                }
+                            """)
+                        else:
+                            btn_update.setText("🔄 Обновить клиент")
+                            btn_update.setToolTip(f"Инициировать сборку/отправку актуальной версии клиента ({qt_flv}) по сети.")
+                            btn_update.setEnabled(True)
+                            btn_update.setStyleSheet("""
+                                QPushButton {
+                                    background-color: #2980b9;
+                                    color: white;
+                                    border: none;
+                                    border-radius: 4px;
+                                    padding: 4px 8px;
+                                    font-size: 11px;
+                                    font-weight: bold;
+                                }
+                                QPushButton:hover {
+                                    background-color: #3498db;
+                                }
+                            """)
+                        btn_update.clicked.connect(lambda checked, cid=client_id, flv=qt_flv: self.trigger_client_update(cid, flv))
+                        self.table.setCellWidget(row, 4, btn_update)
                 
                 # Кнопка действия (Блокировка)
                 btn_action = QPushButton()
@@ -8479,7 +8543,7 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    app = QApplication(sys.argv)
+    app = _early_app or QApplication(sys.argv)
     app.setStyle("Fusion")
 
     # Настройка палитры приложения для серых неактивных пунктов меню на Windows
@@ -8488,30 +8552,10 @@ if __name__ == "__main__":
     palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor("#666666"))
     app.setPalette(palette)
 
-    # Защита от запуска второй копии программы (используем мьютекс Windows)
-    try:
-        import ctypes
-        mutex_name = "ASSServerMutex_1.0"
-        mutex = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
-        last_error = ctypes.windll.kernel32.GetLastError()
-        if last_error == 183:  # ERROR_ALREADY_EXISTS
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(None, "Ошибка запуска", "Программа уже запущена!")
-            sys.exit(0)
-    except Exception:
-        pass
-
-    # Иконка на QApplication охватывает все окна приложения
-    for icon_name in ["icon_server.ico", "icon_server.png", "app_icon.ico", "app_icon.png"]:
-        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), icon_name)
-        if os.path.exists(icon_path):
-            app.setWindowIcon(QIcon(icon_path))
-            break
-
     # Сплэш-скрин загрузки сервера
     from src.ui.splash import create_splash_screen
-    splash = create_splash_screen(app, is_server=True)
-    splash.set_progress(15, "Загрузка конфигурации и стилей оформления...")
+    splash = _early_splash or create_splash_screen(app, is_server=True)
+    splash.set_progress(90, "Подготовка главного окна...")
 
     window = MainWindow(splash=splash)
     splash.set_progress(100, "Сервер готов к работе!")

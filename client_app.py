@@ -186,10 +186,14 @@ except ImportError as e:
     raise e
 # ----------------------------------
 
-import pyqtgraph as pg
-import numpy as np
-import pydicom
-import elekta_mod
+def get_resource_path(relative_path: str) -> str:
+    """Возвращает абсолютный путь к ресурсу, поддерживая запуск из собранного PyInstaller exe."""
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
+
+_early_app = None
+_early_splash = None
 
 # Импорт PyQt6
 try:
@@ -301,11 +305,50 @@ try:
 except ImportError:
     PYQT_AVAILABLE = False
 
-def get_resource_path(relative_path: str) -> str:
-    """Возвращает абсолютный путь к ресурсу, поддерживая запуск из собранного PyInstaller exe."""
-    if hasattr(sys, '_MEIPASS'):
-        return os.path.join(sys._MEIPASS, relative_path)
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
+if __name__ == "__main__" and PYQT_AVAILABLE:
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ASS.Client.1.0")
+        except Exception:
+            pass
+
+        # Защита от запуска второй копии программы (используем мьютекс Windows)
+        try:
+            _mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "ASSClientMutex_1.0")
+            if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+                _tmp_app = QApplication.instance() or QApplication(sys.argv)
+                QMessageBox.warning(None, "Ошибка запуска", "Программа уже запущена!")
+                sys.exit(0)
+        except Exception:
+            pass
+
+        _early_app = QApplication.instance() or QApplication(sys.argv)
+        _early_app.setStyle("Fusion")
+
+        for _icon_name in ["icon_client.ico", "icon_client.png", "app_icon.ico", "app_icon.png"]:
+            _icon_path = get_resource_path(_icon_name)
+            if os.path.exists(_icon_path):
+                _early_app.setWindowIcon(QIcon(_icon_path))
+                break
+
+        from src.ui.splash import create_splash_screen
+        _early_splash = create_splash_screen(_early_app, is_server=False)
+        _early_splash.set_progress(15, "Запуск графической подсистемы...")
+    except Exception as _e:
+        _early_app = None
+        _early_splash = None
+
+if _early_splash:
+    _early_splash.set_progress(35, "Загрузка модулей DICOM и графики...")
+
+import pyqtgraph as pg
+import numpy as np
+import pydicom
+import elekta_mod
+
+if _early_splash:
+    _early_splash.set_progress(60, "Загрузка компонентов интерфейса...")
 
 # Импортируем вычислительный движок или используем легковесный заглушечный класс для клиента
 try:
@@ -7172,7 +7215,7 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    app = QApplication(sys.argv)
+    app = _early_app or QApplication(sys.argv)
     app.setStyle("Fusion")
 
     # Настройка палитры приложения для серых неактивных пунктов меню на Windows
@@ -7181,30 +7224,10 @@ if __name__ == "__main__":
     palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor("#666666"))
     app.setPalette(palette)
 
-    # Защита от запуска второй копии программы (используем мьютекс Windows)
-    try:
-        import ctypes
-        mutex_name = "ASSClientMutex_1.0"
-        mutex = ctypes.windll.kernel32.CreateMutexW(None, False, mutex_name)
-        last_error = ctypes.windll.kernel32.GetLastError()
-        if last_error == 183:  # ERROR_ALREADY_EXISTS
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(None, "Ошибка запуска", "Программа уже запущена!")
-            sys.exit(0)
-    except Exception:
-        pass
-
-    # Иконка на QApplication охватывает все окна приложения
-    for icon_name in ["icon_client.ico", "icon_client.png", "app_icon.ico", "app_icon.png"]:
-        icon_path = get_resource_path(icon_name)
-        if os.path.exists(icon_path):
-            app.setWindowIcon(QIcon(icon_path))
-            break
-
     # Сплэш-скрин загрузки клиента
     from src.ui.splash import create_splash_screen
-    splash = create_splash_screen(app, is_server=False)
-    splash.set_progress(15, "Загрузка конфигурации интерфейса...")
+    splash = _early_splash or create_splash_screen(app, is_server=False)
+    splash.set_progress(90, "Подготовка главного окна...")
 
     window = MainWindow(splash=splash)
     splash.set_progress(100, "Клиент готов к работе!")

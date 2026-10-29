@@ -33,32 +33,32 @@ def create_splash_screen(app, is_server: bool = False):
             self.setWindowFlags(flags)
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground if is_pyqt6 else Qt.WA_TranslucentBackground, True)
             
-            # Компактный размер точно под крупную иконку (360x360) + прогресс-бар
-            self.setFixedSize(384, 412)
+            # Увеличенный в 1.5 раза размер под крупную иконку (528x528) + прогресс-бар 500px без черных рамок
+            self.setFixedSize(576, 590)
             
             layout = QVBoxLayout(self)
-            layout.setContentsMargins(6, 6, 6, 6)
+            layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(0)
             
             container = QWidget(self)
             container.setObjectName("splashCard")
             container.setStyleSheet("""
                 QWidget#splashCard {
-                    background-color: #151518;
-                    border: 1px solid #2d2d35;
-                    border-radius: 16px;
+                    background: transparent;
+                    border: none;
                 }
             """)
             layout.addWidget(container)
             
             c_layout = QVBoxLayout(container)
-            c_layout.setContentsMargins(10, 10, 10, 10)
+            c_layout.setContentsMargins(0, 0, 0, 0)
             c_layout.setSpacing(8)
+            c_layout.setAlignment(Qt.AlignmentFlag.AlignCenter if is_pyqt6 else Qt.AlignCenter)
             
-            # Большая иконка приложения
+            # Большая иконка приложения (в 1.5 раза крупнее: 528x528)
             self.logo_label = QLabel()
             self.logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter if is_pyqt6 else Qt.AlignCenter)
-            self.logo_label.setFixedSize(352, 352)
+            self.logo_label.setFixedSize(528, 528)
             
             base_dir = Path(__file__).resolve().parent.parent.parent
             icon_file = "icon_server.png" if is_server else "icon_client.png"
@@ -72,13 +72,14 @@ def create_splash_screen(app, is_server: bool = False):
                 pix = QPixmap(str(icon_path))
                 if not pix.isNull():
                     transform_mode = Qt.TransformationMode.SmoothTransformation if is_pyqt6 else Qt.SmoothTransformation
-                    self.logo_label.setPixmap(pix.scaled(350, 350, Qt.AspectRatioMode.KeepAspectRatio if is_pyqt6 else Qt.KeepAspectRatio, transform_mode))
+                    self.logo_label.setPixmap(pix.scaled(525, 525, Qt.AspectRatioMode.KeepAspectRatio if is_pyqt6 else Qt.KeepAspectRatio, transform_mode))
             
-            c_layout.addWidget(self.logo_label)
+            c_layout.addWidget(self.logo_label, 0, Qt.AlignmentFlag.AlignCenter if is_pyqt6 else Qt.AlignCenter)
             
-            # Тонкий аккуратный прогресс-бар точно под иконкой
+            # Тонкий аккуратный прогресс-бар шириной 500px точно под иконкой
             self.progress_bar = QProgressBar()
-            self.progress_bar.setFixedHeight(6)
+            self.progress_bar.setFixedHeight(8)
+            self.progress_bar.setFixedWidth(500)
             self.progress_bar.setRange(0, 100)
             self.progress_bar.setValue(10)
             self.progress_bar.setTextVisible(False)
@@ -86,20 +87,20 @@ def create_splash_screen(app, is_server: bool = False):
                 QProgressBar {
                     background-color: #24242c;
                     border: none;
-                    border-radius: 3px;
+                    border-radius: 4px;
                 }
                 QProgressBar::chunk {
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #007acc, stop:1 #00ffd0);
-                    border-radius: 3px;
+                    border-radius: 4px;
                 }
             """)
-            c_layout.addWidget(self.progress_bar)
+            c_layout.addWidget(self.progress_bar, 0, Qt.AlignmentFlag.AlignCenter if is_pyqt6 else Qt.AlignCenter)
 
-            # Текст статуса (лаконичный, прямо под полосой прогресса)
+            # Текст статуса (лаконичный, шрифт 11px без изменений)
             self.status_label = QLabel("Загрузка...")
             self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter if is_pyqt6 else Qt.AlignCenter)
             self.status_label.setStyleSheet("color: #888899; font-size: 11px; margin-top: 2px;")
-            c_layout.addWidget(self.status_label)
+            c_layout.addWidget(self.status_label, 0, Qt.AlignmentFlag.AlignCenter if is_pyqt6 else Qt.AlignCenter)
             
             self.center_on_screen(app)
 

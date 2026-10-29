@@ -43,6 +43,7 @@ from fastapi.responses import JSONResponse
 _builder_lock = threading.Lock()
 _active_builds: Dict[str, threading.Thread] = {}
 _pending_build_subscribers: Dict[str, List[str]] = {}
+_build_progress: Dict[str, Dict[str, Any]] = {}
 
 class BlacklistManager:
     def __init__(self):
@@ -98,6 +99,7 @@ class BlacklistManager:
             qt_flv = meta.get("qt_flavor", "PyQt6")
             tag = "PyQt5" if "5" in str(qt_flv).lower() else "PyQt6"
             is_building = (tag in _active_builds) and (cid in _pending_build_subscribers.get(tag, []))
+            prog = _build_progress.get(tag, {}) if is_building else {}
             info.append({
                 "client_id": cid,
                 "version": meta.get("version", "—"),
@@ -105,7 +107,9 @@ class BlacklistManager:
                 "last_activity": "Заблокирован",
                 "status": "Заблокирован",
                 "has_pending_update": cid in self.pending_updates,
-                "is_building": is_building
+                "is_building": is_building,
+                "build_percent": prog.get("percent", 0) if is_building else 0,
+                "build_stage": prog.get("stage", "") if is_building else ""
             })
         
         current_time = time.time()
@@ -121,6 +125,7 @@ class BlacklistManager:
             qt_flv = meta.get("qt_flavor", "PyQt6")
             tag = "PyQt5" if "5" in str(qt_flv).lower() else "PyQt6"
             is_building = (tag in _active_builds) and (cid in _pending_build_subscribers.get(tag, []))
+            prog = _build_progress.get(tag, {}) if is_building else {}
             info.append({
                 "client_id": cid,
                 "version": meta.get("version", "—"),
@@ -128,7 +133,9 @@ class BlacklistManager:
                 "last_activity": dt,
                 "status": status,
                 "has_pending_update": cid in self.pending_updates,
-                "is_building": is_building
+                "is_building": is_building,
+                "build_percent": prog.get("percent", 0) if is_building else 0,
+                "build_stage": prog.get("stage", "") if is_building else ""
             })
         return info
 
@@ -572,29 +579,86 @@ def _run_build_client_job(qt_flavor: str):
     script_path = base_dir / script_name
 
     logger.info(f"[ClientBuilder] Запуск процесса сборки {tag} ({script_name})...")
+    with _builder_lock:
+        _build_progress[tag] = {"percent": 5, "stage": "Запуск сборщика..."}
+
     try:
         kwargs = {
             "cwd": str(base_dir),
-            "capture_output": True,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
             "text": True,
+            "bufsize": 1,
             "encoding": "utf-8",
             "errors": "replace"
         }
         if sys.platform == "win32":
             kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
 
-        proc = subprocess.run(
-            [py_exe, str(script_path), "--no-bump"],
+        proc = subprocess.Popen(
+            [py_exe, "-u", str(script_path), "--no-bump"],
             **kwargs
         )
+
+        current_percent = 5
+        current_stage = "Инициализация"
+
+        if proc.stdout:
+            for raw_line in proc.stdout:
+                line = raw_line.strip()
+                if not line:
+                    continue
+
+                line_lower = line.lower()
+                if "0. обновление версии" in line_lower or "сборка текущей актуальной" in line_lower:
+                    current_percent = 10
+                    current_stage = "Версия"
+                elif "1. проверка и установка" in line_lower:
+                    current_percent = 20
+                    current_stage = "Зависимости"
+                elif "2.5. патч qt" in line_lower or "патч qt6core" in line_lower:
+                    current_percent = 30
+                    current_stage = "Патч DLL"
+                elif "2. генерация иконки" in line_lower:
+                    current_percent = 40
+                    current_stage = "Иконки"
+                elif "3. запуск компиляции" in line_lower or "pyinstaller в venv" in line_lower:
+                    current_percent = 48
+                    current_stage = "PyInstaller"
+                elif "collect_submodules" in line_lower or "подмодулей" in line_lower:
+                    current_percent = 55
+                    current_stage = "Анализ модулей"
+                elif "building analysis" in line_lower or "analyzing" in line_lower:
+                    current_percent = 65
+                    current_stage = "Анализ кода"
+                elif "processing" in line_lower or "dynamic libraries" in line_lower:
+                    current_percent = 75
+                    current_stage = "Сборка DLL"
+                elif "building pkg" in line_lower or "archive" in line_lower:
+                    current_percent = 84
+                    current_stage = "Упаковка PKG"
+                elif "building exe" in line_lower or "appending" in line_lower:
+                    current_percent = 92
+                    current_stage = "Линковка EXE"
+                elif "успешно выполнена" in line_lower:
+                    current_percent = 97
+                    current_stage = "Завершение"
+
+                with _builder_lock:
+                    _build_progress[tag] = {"percent": current_percent, "stage": current_stage}
+
+        proc.wait()
         if proc.returncode != 0:
-            logger.error(f"[ClientBuilder] Сборка {tag} завершилась с ошибкой:\n{proc.stderr[-1000:]}")
+            logger.error(f"[ClientBuilder] Сборка {tag} завершилась с ошибкой (код {proc.returncode})")
             return
             
         dist_exe = base_dir / "dist" / "ASS_Client.exe"
         if not dist_exe.exists():
             logger.error(f"[ClientBuilder] Собранный файл dist/ASS_Client.exe не найден!")
             return
+
+        with _builder_lock:
+            _build_progress[tag] = {"percent": 98, "stage": "Регистрация..."}
 
         cur_ver = get_version()
         meta = update_manager.register_client_binary(
@@ -607,6 +671,7 @@ def _run_build_client_job(qt_flavor: str):
         logger.info(f"[ClientBuilder] Клиент {tag} успешно собран и зарегистрирован: v{meta['version']}")
 
         with _builder_lock:
+            _build_progress[tag] = {"percent": 100, "stage": "Готово"}
             subscribers = _pending_build_subscribers.pop(tag, [])
             for cid in subscribers:
                 blacklist_manager.queue_client_update(cid, meta["version"], qt_flavor=tag, force=True)
@@ -616,6 +681,7 @@ def _run_build_client_job(qt_flavor: str):
     finally:
         with _builder_lock:
             _active_builds.pop(tag, None)
+            _build_progress.pop(tag, None)
 
 @app.post("/api/server/clients/{client_id}/update")
 def trigger_client_remote_update(client_id: str, payload: Optional[ClientUpdateTriggerPayload] = None):
@@ -648,11 +714,14 @@ def trigger_client_remote_update(client_id: str, payload: Optional[ClientUpdateT
                 _pending_build_subscribers[tag] = []
             if client_id not in _pending_build_subscribers[tag]:
                 _pending_build_subscribers[tag].append(client_id)
+            prog = _build_progress.get(tag, {})
             return {
                 "status": "building",
                 "message": f"Сборка актуальной версии ({tag} v{current_actual_v}) уже выполняется на сервере. Клиент '{client_id}' получит обновление сразу по завершении.",
                 "qt_flavor": tag,
-                "version": current_actual_v
+                "version": current_actual_v,
+                "build_percent": prog.get("percent", 0),
+                "build_stage": prog.get("stage", "")
             }
 
         if needs_build:
