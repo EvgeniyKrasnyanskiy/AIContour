@@ -176,7 +176,10 @@ def build_executable(has_icon):
     args.append("client_app.py")
     
     print(f"[INFO] Выполняется команда сборки:\n{' '.join(args)}")
-    subprocess.check_call(args)
+    call_kwargs = {}
+    if sys.platform == "win32":
+        call_kwargs["creationflags"] = 0x08000000
+    subprocess.check_call(args, **call_kwargs)
     print("[OK] Компиляция .exe успешно завершена.")
 
 def package_portable_zip():
@@ -312,8 +315,11 @@ def main():
         # Убедимся, что рабочая директория — это корень проекта
         os.chdir(Path(__file__).parent.resolve())
         
-        # Обновляем версию клиента
-        increment_version()
+        # Обновляем версию клиента, если не указан флаг --no-bump
+        if "--no-bump" not in sys.argv:
+            increment_version()
+        else:
+            print("[INFO] Сборка текущей актуальной версии (флаг --no-bump).")
         
         check_and_install_dependencies()
         

@@ -27,13 +27,20 @@ class TestVersionAndUpdates(unittest.TestCase):
         self.orig_metadata_file = update_manager.metadata_file
 
         temp_path = Path(self.temp_dir.name)
+        self.temp_path = temp_path
         update_manager.updates_dir = temp_path
         update_manager.metadata_file = temp_path / "version.json"
 
-        # Копируем существующий version.json во временную папку, если он есть
-        if self.orig_metadata_file.exists():
-            shutil.copy2(str(self.orig_metadata_file), str(update_manager.metadata_file))
-        (temp_path / "ASS_Client.exe").write_bytes(b"MZ_INITIAL_CLIENT_STUB")
+        cur_v = get_version()
+        dummy_exe = temp_path / "ASS_Client.exe"
+        dummy_exe.write_bytes(b"MZ_INITIAL_CLIENT_STUB")
+        update_manager.register_client_binary(
+            source_path=dummy_exe,
+            version_str=cur_v,
+            is_critical=False,
+            changelog="Тестовая актуальная сборка",
+            qt_flavor="PyQt5"
+        )
 
         self.client = TestClient(app)
 
@@ -167,6 +174,46 @@ class TestVersionAndUpdates(unittest.TestCase):
         res_after = self.client.get("/api/server/status", headers=headers_updated)
         self.assertEqual(res_after.status_code, 200)
         self.assertNotIn("push_update", res_after.json())
+
+    def test_outdated_ready_binary_triggers_rebuild(self):
+        # 1. Загружаем на сервер старую версию (v2.0.1 при актуальной v2.0.36)
+        update_manager.register_client_binary(
+            source_path=self.temp_path / "ASS_Client.exe",
+            version_str="2.0.1",
+            qt_flavor="PyQt6"
+        )
+        # 2. Инициируем обновление: сервер должен отклонить готовую v2.0.1 и запустить компиляцию актуальной
+        res_up = self.client.post(
+            "/api/server/clients/OutdatedClient/update",
+            json={"force_rebuild": False, "qt_flavor": "PyQt6"}
+        )
+        self.assertEqual(res_up.status_code, 200)
+        up_data = res_up.json()
+        self.assertEqual(up_data["status"], "building")
+        self.assertEqual(up_data["version"], get_version())
+
+    def test_push_update_delivered_even_if_version_matches(self):
+        cur_v = get_version()
+        headers = {
+            "X-Client-ID": "SameVersionClient",
+            "X-Client-Version": cur_v,
+            "X-Client-Qt": "PyQt5"
+        }
+        # Сервер имеет актуальную сборку v{cur_v} (из setUp)
+        res_up = self.client.post(
+            "/api/server/clients/SameVersionClient/update",
+            json={"force_rebuild": False, "qt_flavor": "PyQt5"}
+        )
+        self.assertEqual(res_up.status_code, 200)
+        
+        # Клиент отправляет статус с версией cur_v -> push_update ОБЯЗАН быть доставлен
+        res_ping = self.client.get("/api/server/status", headers=headers)
+        self.assertEqual(res_ping.status_code, 200)
+        ping_data = res_ping.json()
+        self.assertIn("push_update", ping_data)
+        self.assertTrue(ping_data["push_update"]["should_update"])
+        self.assertTrue(ping_data["push_update"]["force"])
+        self.assertEqual(ping_data["push_update"]["version"], cur_v)
 
 
 if __name__ == "__main__":

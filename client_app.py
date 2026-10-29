@@ -3033,22 +3033,28 @@ if PYQT_AVAILABLE:
                     "Обновленный файл сохранен во временной папке."
                 )
 
-        def start_background_update_download(self, latest_v: str, qt_flavor: Optional[str] = None, auto_apply: bool = False):
+        def start_background_update_download(self, latest_v: str, qt_flavor: Optional[str] = None, auto_apply: bool = False, force: bool = False):
             """Запуск тихого фонового скачивания обновления с сервера в период простоя станции."""
             if getattr(self, "is_bg_downloading", False):
                 return
-            if getattr(self, "staged_update_version", None) == latest_v and self.updater.staged_file.exists():
+            if not force and getattr(self, "staged_update_version", None) == latest_v and self.updater.staged_file.exists():
                 if auto_apply:
                     logger.info(f"Обновление v{latest_v} уже скачано. Немедленный перезапуск по требованию сервера...")
                     self.save_settings()
                     success = self.updater.apply_update_and_restart()
                     if success:
-                        from PyQt6.QtWidgets import QApplication
-                        QApplication.quit()
+                        import os
+                        os._exit(0)
                     return
                 self.btn_corner_update.setText(f"🔄 Перезапустить (v{latest_v})")
                 self.btn_corner_update.setVisible(True)
                 return
+
+            if force and self.updater.staged_file.exists():
+                try:
+                    self.updater.staged_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
             server_url = self.get_server_url()
             if not server_url:
@@ -3059,7 +3065,7 @@ if PYQT_AVAILABLE:
 
             self.is_bg_downloading = True
             self.available_update_version = latest_v
-            logger.info(f"Станция свободна: запуск фонового скачивания обновления v{latest_v} ({qt_flavor}) с сервера (auto_apply={auto_apply})...")
+            logger.info(f"Станция свободна: запуск фонового скачивания обновления v{latest_v} ({qt_flavor}) с сервера (auto_apply={auto_apply}, force={force})...")
             
             def bg_done(success: bool, msg: str):
                 self.is_bg_downloading = False
@@ -3070,8 +3076,8 @@ if PYQT_AVAILABLE:
                         self.save_settings()
                         success_restart = self.updater.apply_update_and_restart()
                         if success_restart:
-                            from PyQt6.QtWidgets import QApplication
-                            QApplication.quit()
+                            import os
+                            os._exit(0)
                         return
                     self.btn_corner_update.setText(f"🔄 Перезапустить (v{latest_v})")
                     self.btn_corner_update.setVisible(True)
@@ -6215,8 +6221,14 @@ if PYQT_AVAILABLE:
                     target_v = push_update.get("version") or latest_client_ver
                     qt_flv = push_update.get("qt")
                     auto_apply = push_update.get("auto_apply", True)
-                    if not getattr(self, "is_bg_downloading", False) and not getattr(self, "_current_active_job_id", None):
-                        self.start_background_update_download(target_v, qt_flavor=qt_flv, auto_apply=auto_apply)
+                    force = push_update.get("force", False)
+                    update_id = push_update.get("update_id", "")
+                    
+                    if update_id and getattr(self, "_active_update_id", None) == update_id:
+                        pass
+                    elif not getattr(self, "is_bg_downloading", False) and not getattr(self, "_current_active_job_id", None):
+                        self._active_update_id = update_id
+                        self.start_background_update_download(target_v, qt_flavor=qt_flv, auto_apply=auto_apply, force=force)
                 elif has_client_update and latest_client_ver:
                     if getattr(self, "staged_update_version", None) == latest_client_ver and self.updater.staged_file.exists():
                         self.btn_corner_update.setText(f"🔄 Перезапустить (v{latest_client_ver})")

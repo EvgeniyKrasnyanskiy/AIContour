@@ -1329,9 +1329,26 @@ if PYQT_AVAILABLE:
                 else:
                     btn_update = QPushButton()
                     btn_update.setCursor(Qt.CursorShape.PointingHandCursor)
-                    if has_pending:
-                        btn_update.setText("⏳ Ожидание...")
-                        btn_update.setToolTip("Клиент получил команду на обновление и скачает его при следующем обращении к серверу.")
+                    is_building = client.get("is_building", False)
+                    if is_building:
+                        btn_update.setText("⏳ Сборка exe...")
+                        btn_update.setToolTip(f"Идет фоновая компиляция PyInstaller актуальной версии ({qt_flv}) на сервере...")
+                        btn_update.setEnabled(False)
+                        btn_update.setStyleSheet("""
+                            QPushButton {
+                                background-color: #f39c12;
+                                color: #1e1e1e;
+                                border: none;
+                                border-radius: 4px;
+                                padding: 4px 8px;
+                                font-size: 11px;
+                                font-weight: bold;
+                            }
+                        """)
+                    elif has_pending:
+                        btn_update.setText("⏳ Отправка...")
+                        btn_update.setToolTip("Клиент получил команду на обновление и скачивает актуальный exe-файл...")
+                        btn_update.setEnabled(False)
                         btn_update.setStyleSheet("""
                             QPushButton {
                                 background-color: #d35400;
@@ -1342,13 +1359,11 @@ if PYQT_AVAILABLE:
                                 font-size: 11px;
                                 font-weight: bold;
                             }
-                            QPushButton:hover {
-                                background-color: #e67e22;
-                            }
                         """)
                     else:
                         btn_update.setText("🔄 Обновить клиент")
-                        btn_update.setToolTip(f"Инициировать сборку/отправку обновления клиента ({qt_flv}) по сети.")
+                        btn_update.setToolTip(f"Инициировать сборку/отправку актуальной версии клиента ({qt_flv}) по сети.")
+                        btn_update.setEnabled(True)
                         btn_update.setStyleSheet("""
                             QPushButton {
                                 background-color: #2980b9;
@@ -1406,28 +1421,30 @@ if PYQT_AVAILABLE:
 
         def trigger_client_update(self, client_id: str, qt_flavor: str):
             import requests
-            # Проверяем наличие готового бинарника на сервере
-            has_ready_binary = False
-            latest_ver = ""
+            from version import get_version
+            actual_ver = get_version()
+            ready_ver = ""
+            has_ready_actual_binary = False
             try:
                 url_info = f"{self.server_url}/api/updates/client/info?qt={qt_flavor}"
                 headers = {"X-Client-ID": "ServerAdmin"}
                 r_info = requests.get(url_info, headers=headers, timeout=3)
                 if r_info.status_code == 200:
                     d = r_info.json()
-                    latest_ver = d.get("latest_version", "")
-                    has_ready_binary = (d.get("file_size", 0) > 0)
+                    ready_ver = d.get("latest_version", "")
+                    has_file = (d.get("file_size", 0) > 0)
+                    has_ready_actual_binary = (has_file and ready_ver == actual_ver)
             except Exception:
-                has_ready_binary = False
+                has_ready_actual_binary = False
 
             tag = "PyQt5" if "5" in str(qt_flavor).lower() else "PyQt6"
 
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Обновление клиента по сети")
             
-            if has_ready_binary:
+            if has_ready_actual_binary:
                 msg_box.setText(
-                    f"Для клиента <b>{client_id}</b> ({tag}) на сервере доступен готовый файл v{latest_ver}."
+                    f"Для клиента <b>{client_id}</b> ({tag}) на сервере доступен готовый файл актуальной версии <b>v{actual_ver}</b>."
                 )
                 msg_box.setInformativeText(
                     "Отправить существующий файл клиенту или скомпилировать заново через PyInstaller?"
@@ -1443,13 +1460,20 @@ if PYQT_AVAILABLE:
                     return
                 force_rebuild = (clicked_btn == btn_rebuild)
             else:
-                msg_box.setText(
-                    f"Скомпилировать новый исполняемый файл клиента (ветка {tag}) на сервере и обновить <b>{client_id}</b> по сети?"
-                )
+                if ready_ver and ready_ver != actual_ver:
+                    msg_box.setText(
+                        f"Сборка на сервере устарела (готовая: <b>v{ready_ver}</b>, актуальная: <b>v{actual_ver}</b>).<br>"
+                        f"Сервер должен отправить клиенту <b>{client_id}</b> ({tag}) только самую последнюю актуальную версию."
+                    )
+                else:
+                    msg_box.setText(
+                        f"Скомпилировать актуальную версию клиента <b>v{actual_ver}</b> (ветка {tag}) на сервере и обновить <b>{client_id}</b> по сети?"
+                    )
                 msg_box.setInformativeText(
-                    "Сервер запустит компиляцию в фоновом режиме. После сборки клиент автоматически скачает обновление и перезапустится."
+                    "Будет запущена компиляция актуального .exe в тихом фоновом режиме. "
+                    "После сборки клиент автоматически скачает обновление и перезапустится."
                 )
-                btn_build = msg_box.addButton("🔨 Собрать и обновить", QMessageBox.ButtonRole.ActionRole)
+                btn_build = msg_box.addButton("🔨 Собрать актуальную и обновить", QMessageBox.ButtonRole.ActionRole)
                 btn_cancel = msg_box.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
                 msg_box.setDefaultButton(btn_build)
                 msg_box.exec()
