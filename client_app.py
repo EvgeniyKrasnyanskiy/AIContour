@@ -1786,7 +1786,7 @@ if PYQT_AVAILABLE:
         def __init__(self, splash=None):
             super().__init__()
             self.splash = splash
-            self.setWindowTitle("Auto Segmentation System [Клиент]")
+            self.setWindowTitle(f"Auto Segmentation System [Клиент v{self.get_client_version()}]")
             self.setMinimumSize(960, 760)
             if not self.splash:
                 self.showMaximized()

@@ -1207,12 +1207,17 @@ if PYQT_AVAILABLE:
             desc.setWordWrap(True)
             desc.setStyleSheet("color: #a0a0a0; font-size: 11px;")
             layout.addWidget(desc)
+
+            from version import get_version
+            self.lbl_latest_target_ver = QLabel(f"Актуальная версия для сборки и отправки: <b>v{get_version()}</b>")
+            self.lbl_latest_target_ver.setStyleSheet("color: #00d2d3; font-size: 12px; margin-top: 2px; margin-bottom: 2px;")
+            layout.addWidget(self.lbl_latest_target_ver)
             
             # Таблица клиентов
             self.table = QTableWidget()
             self.table.setColumnCount(6)
             self.table.setHorizontalHeaderLabels([
-                "Client ID (Имя ПК)", 
+                "Клиент", 
                 "Версия / Qt", 
                 "Последняя активность", 
                 "Статус", 
@@ -1260,6 +1265,9 @@ if PYQT_AVAILABLE:
             
         def refresh_clients(self):
             import requests
+            from version import get_version
+            if hasattr(self, 'lbl_latest_target_ver'):
+                self.lbl_latest_target_ver.setText(f"Актуальная версия для сборки и отправки: <b>v{get_version()}</b>")
             try:
                 url = f"{self.server_url}/api/server/clients"
                 headers = {"X-Client-ID": "ServerAdmin"}
@@ -1289,7 +1297,11 @@ if PYQT_AVAILABLE:
                 item_id.setForeground(QBrush(QColor("#ffffff")))
                 self.table.setItem(row, 0, item_id)
 
-                display_ver = f"v{ver} ({qt_flv})" if ver and ver != "—" else f"({qt_flv})"
+                tag_clean = qt_flv.replace("PyQt", "Qt") if qt_flv else "Qt6"
+                if ver and ver != "—":
+                    display_ver = f"v{ver} {tag_clean}"
+                else:
+                    display_ver = f"< v2.0.33 ({tag_clean})"
                 item_ver = QTableWidgetItem(display_ver)
                 item_ver.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 item_ver.setForeground(QBrush(QColor("#00d2d3")))
@@ -2960,8 +2972,8 @@ if PYQT_AVAILABLE:
             self.btn_connected_clients.clicked.connect(show_connected_clients)
             admin_settings_layout.addWidget(self.btn_connected_clients)
             
-            # Управление обновлениями клиентов (Auto-Update Hub)
-            update_admin_group = QGroupBox("📦 Раздача обновлений клиентам (Auto-Update Hub)")
+            # Управление обновлениями клиентов (Update Hub)
+            update_admin_group = QGroupBox("📦 Update Hub")
             update_admin_layout = QVBoxLayout(update_admin_group)
             update_admin_layout.setSpacing(8)
 
@@ -2970,8 +2982,15 @@ if PYQT_AVAILABLE:
             self.server_update_mgr = UpdateManager()
             update_meta = self.server_update_mgr.get_update_info()
 
+            curr_v = get_version()
+            dist_v = update_meta.get('latest_version', curr_v)
+            diff_note = ""
+            if dist_v != curr_v:
+                diff_note = f" <span style='color: #f39c12;'>(доступна новая версия v{curr_v} для сборки)</span>"
+
             self.lbl_admin_update_info = QLabel(
-                f"Раздаваемая версия клиента: <b>v{update_meta.get('latest_version', get_version())}</b><br>"
+                f"Актуальная версия системы: <b>v{curr_v}</b><br>"
+                f"Раздаваемая сборка клиента: <b>v{dist_v}</b>{diff_note}<br>"
                 f"Файл: <code>{update_meta.get('file_name', 'ASS_Client.exe')}</code> "
                 f"({update_meta.get('file_size', 0) / (1024*1024):.1f} МБ)"
             )
