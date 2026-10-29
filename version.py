@@ -43,7 +43,10 @@ __version__ = load_version()
 
 def get_version() -> str:
     """Возвращает текущую версию системы."""
+    global __version__
+    __version__ = load_version()
     return __version__
+
 
 
 def parse_version_tuple(v_str: str) -> Tuple[int, ...]:
