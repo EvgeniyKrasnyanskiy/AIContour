@@ -99,6 +99,30 @@ class TestClusterManager(unittest.TestCase):
         w2 = self.cm.get_available_worker()
         self.assertEqual(w2.worker_id, "rw-2")
 
+    def test_dispatch_policy_server_only(self):
+        self.cm.dispatch_policy = "server_only"
+        # 1. With local idle, local is chosen
+        w = self.cm.get_available_worker()
+        self.assertIsNotNone(w)
+        self.assertTrue(w.is_local)
+
+        # 2. Register remote idle worker - server_only MUST still pick local worker
+        self.cm.register_worker({
+            "worker_id": "rw-srv-only",
+            "name": "Remote-Worker-Srv",
+            "host": "192.168.1.150"
+        })
+        w2 = self.cm.get_available_worker()
+        self.assertIsNotNone(w2)
+        self.assertTrue(w2.is_local)
+
+        # 3. When local master is busy, server_only must return None (no offloading to remote)
+        self.cm.local_worker.status = "PROCESSING"
+        w3 = self.cm.get_available_worker()
+        self.assertIsNone(w3)
+        self.cm.local_worker.status = "IDLE"
+
+
     def test_unregister_worker(self):
         self.cm.register_worker({
             "worker_id": "to-del",
@@ -154,9 +178,13 @@ class TestClusterAPI(unittest.TestCase):
         self.assertIn("api-worker-test-1", worker_ids)
 
         # 4. Policy change
-        pr = self.client.post("/api/cluster/policy", json={"policy": "first_available"})
+        pr = self.client.post("/api/cluster/policy", json={"policy": "server_only"})
         self.assertEqual(pr.status_code, 200)
-        self.assertEqual(pr.json()["policy"], "first_available")
+        self.assertEqual(pr.json()["policy"], "server_only")
+
+        pr2 = self.client.post("/api/cluster/policy", json={"policy": "first_available"})
+        self.assertEqual(pr2.status_code, 200)
+        self.assertEqual(pr2.json()["policy"], "first_available")
 
         # 5. Server status includes cluster
         stat_res = self.client.get("/api/server/status")

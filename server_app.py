@@ -3746,7 +3746,14 @@ if PYQT_AVAILABLE:
             """Сохраняет состояние интерфейса в QSettings."""
             self.settings.setValue("input_dir", self.input_edit.text().strip())
             self.settings.setValue("server_url", self.server_url_edit.text().strip())
-            self.settings.setValue("client_name", self.client_name_edit.text().strip())
+            new_client_name = self.client_name_edit.text().strip()
+            self.settings.setValue("client_name", new_client_name)
+            try:
+                from server.server_api import queue_manager
+                if hasattr(queue_manager, 'cluster_mgr') and queue_manager.cluster_mgr.local_worker:
+                    queue_manager.cluster_mgr.local_worker.name = new_client_name
+            except Exception:
+                pass
             if hasattr(self, "temp_dir_edit"):
                 self.settings.setValue("temp_dir", self.temp_dir_edit.text().strip())
             if hasattr(self, "last_alternative_output_dir") and self.last_alternative_output_dir:
@@ -7171,6 +7178,7 @@ version = {sys.version.split()[0]}
             self.combo_cluster_policy.addItem("Приоритет воркеров (Рекомендуется для 16 GB CPU)", "offload_workers")
             self.combo_cluster_policy.addItem("Выделенный координатор (Мастер только диспетчер)", "dedicated_coordinator")
             self.combo_cluster_policy.addItem("Первый свободный узел", "first_available")
+            self.combo_cluster_policy.addItem("Только сервер", "server_only")
             
             # Восстанавливаем сохранённое значение при создании виджета
             saved_pol = self.settings.value("dispatch_policy", "offload_workers")
@@ -7199,7 +7207,7 @@ version = {sys.version.split()[0]}
             self.table_cluster = QTableWidget()
             self.table_cluster.setColumnCount(8)
             self.table_cluster.setHorizontalHeaderLabels([
-                "Узел (Имя)", "Сетевой адрес", "Устройство", "Статус", "Пациент / Задача", "ОЗУ (Исп/Всего)", "Связь", "Управление"
+                "Нода", "Сетевой адрес", "Устройство", "Статус", "Задача", "ОЗУ (Исп/Всего)", "Связь", "Управление"
             ])
             self.table_cluster.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
             self.table_cluster.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
@@ -7318,8 +7326,18 @@ version = {sys.version.split()[0]}
                 self.table_cluster.setRowCount(len(workers))
                 from PyQt6.QtGui import QBrush, QColor, QFont
                 for row, w in enumerate(workers):
-                    # 0. Имя
-                    name_text = f"{w['name']} (Этот ПК)" if w.get('is_local') else w['name']
+                    # 0. Имя (Нода)
+                    if w.get('is_local'):
+                        client_id = ""
+                        if hasattr(self, "client_name_edit"):
+                            client_id = self.client_name_edit.text().strip()
+                        if not client_id:
+                            client_id = self.settings.value("client_name", "")
+                        if not client_id:
+                            client_id = w.get('name') or "Сервер"
+                        name_text = client_id
+                    else:
+                        name_text = w.get('name', '')
                     item_name = self.create_table_item(name_text)
                     if w.get('is_local'):
                         item_name.setForeground(QBrush(QColor("#00d2d3")))

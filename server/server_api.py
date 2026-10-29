@@ -737,7 +737,7 @@ def set_cluster_policy(payload: ClusterPolicyPayload):
     """
     Изменение политики балансировки нагрузки в кластере.
     """
-    valid_policies = ["offload_workers", "dedicated_coordinator", "first_available"]
+    valid_policies = ["offload_workers", "dedicated_coordinator", "first_available", "server_only"]
     if payload.policy not in valid_policies:
         raise HTTPException(status_code=400, detail=f"Недопустимая политика. Доступные: {valid_policies}")
     queue_manager.cluster_mgr.dispatch_policy = payload.policy

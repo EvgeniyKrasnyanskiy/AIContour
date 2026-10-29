@@ -29,6 +29,26 @@ from contour_engine import ContourEngine
 from server.cluster_manager import ClusterManager, WorkerNode
 
 
+def _get_server_client_name() -> str:
+    """Безопасно считывает идентификатор клиента (имя ПК) из config/server_settings.ini или системных настроек."""
+    import configparser
+    import socket
+    try:
+        ini_path = Path(__file__).resolve().parent.parent / "config" / "server_settings.ini"
+        if ini_path.exists():
+            config = configparser.ConfigParser()
+            config.read(ini_path, encoding="utf-8")
+            val = config.get("General", "client_name", fallback="").strip()
+            if val:
+                return val
+    except Exception:
+        pass
+    try:
+        return socket.gethostname()
+    except Exception:
+        return "Сервер"
+
+
 def _get_server_dispatch_policy() -> str:
     """Безопасно считывает политику распределения задач в кластере из config/server_settings.ini."""
     import configparser
@@ -136,7 +156,8 @@ class QueueManager:
         # Кластерный менеджер узлов вычислений (Master / Worker Pool)
         self.cluster_mgr = ClusterManager(
             dispatch_policy=_get_server_dispatch_policy(),
-            enable_local_compute=True
+            enable_local_compute=True,
+            local_name=_get_server_client_name()
         )
         
         # Очищаем старые папки от предыдущих запусков при старте

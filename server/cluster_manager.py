@@ -98,7 +98,7 @@ class ClusterManager:
         local_port: int = 8000
     ):
         self.lock = threading.Lock()
-        self.dispatch_policy = dispatch_policy  # offload_workers, dedicated_coordinator, first_available
+        self.dispatch_policy = dispatch_policy  # offload_workers, dedicated_coordinator, first_available, server_only
         self.enable_local_compute = enable_local_compute
         
         self.workers: Dict[str, WorkerNode] = {}
@@ -292,6 +292,12 @@ class ClusterManager:
                     return self.local_worker
                 if remote_idle_workers:
                     return remote_idle_workers[0]
+                return None
+
+            elif self.dispatch_policy == "server_only":
+                # Только локальный сервер — удаленные воркеры не задействуются
+                if local_idle:
+                    return self.local_worker
                 return None
                 
             # По умолчанию: offload_workers fallback
