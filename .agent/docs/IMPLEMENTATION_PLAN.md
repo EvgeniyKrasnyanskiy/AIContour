@@ -216,3 +216,21 @@
   - Обновление тестов `tests/test_client_updater.py`.
   - Прогон всех тестов `tests/test_*.py`.
 
+## Этап 18: Унификация сохранения сборок в updates/client/ и устранение дубликатов файлов [Completed]
+- **1. Направление вывода компиляции напрямую в `updates/client/` (`build_clientPyQT6.py`, `build_clientPyQT5.py`):**
+  - Задание параметра `--distpath updates/client` в аргументах PyInstaller.
+  - Раздельные имена для веток: `ASS_Client_PyQt6` и `ASS_Client_PyQt5`.
+  - Автоматическая регистрация метаданных в `updates/client/version.json` (версия, SHA-256, размер, дата) в конце сборки.
+- **2. Устранение паразитных дубликатов в `UpdateManager` (`server/update_manager.py`):**
+  - Сохранение только одного бинарника соответствующей ветки без дублирования в `ASS_Client.exe`.
+  - Приоритетный поиск в `get_client_binary_path`: `ASS_Client_{tag}.exe` -> fallback на `ASS_Client_PyQt6.exe` / `ASS_Client.exe`.
+  - Удаление промежуточной папки `dist/`.
+- **3. Обновление серверного API и батников (`server/server_api.py`, `build_clientPyQT6.bat`, `build_clientPyQT5.bat`):**
+  - В `_run_build_client_job` считывание готового бинарника напрямую из `updates/client/ASS_Client_{tag}.exe`.
+  - В `.bat` файлах вывод пути `updates\client\ASS_Client_{tag}.exe`.
+- **4. Очистка диска:**
+  - Удаление устаревших `dist/ASS_Client.exe` и дубликата `updates/client/ASS_Client.exe`.
+- **5. Тестирование:**
+  - Прогон unit-тестов `tests/test_updates.py`.
+
+

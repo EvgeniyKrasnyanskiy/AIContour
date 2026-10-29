@@ -4,6 +4,13 @@
 Формат соответствует [Keep a Changelog](https://keepachangelog.com/ru/1.0.0/).
 
 ## [Unreleased]
+- **Унификация сохранения сборок в `updates/client/` и устранение дубликатов файлов:**
+  - Направление вывода компиляции PyInstaller напрямую в целевую директорию сервера `updates/client/` через флаг `--distpath=updates/client`:
+    - `ASS_Client_PyQt6.exe` для современной ветки PyQt6.
+    - `ASS_Client_PyQt5.exe` для ветки совместимости PyQt5.
+  - Устранено паразитное дублирование бинарников на диске: в `update_manager.py` ликвидировано создание двойников `ASS_Client.exe` при наличии профильного `ASS_Client_{tag}.exe`, исключено использование промежуточной папки `dist/`, что суммарно сэкономило более 220 МБ дискового пространства.
+  - Автоматическая синхронизация при ручной сборке: в [build_clientPyQT6.py](file:///d:/ASS/build_clientPyQT6.py) и [build_clientPyQT5.py](file:///d:/ASS/build_clientPyQT5.py) встроена автоматическая генерация манифеста `updates/client/version.json` (версия, SHA-256, размер, дата), благодаря чему запуск через `.bat` сразу обновляет Update Hub на сервере без ручных действий.
+  - Обновлен финальный вывод в батниках [build_clientPyQT6.bat](file:///d:/ASS/build_clientPyQT6.bat) и [build_clientPyQT5.bat](file:///d:/ASS/build_clientPyQT5.bat) с точным указанием пути `updates\client\ASS_Client_{tag}.exe`.
 - **Бесшовное обновление клиента по архитектуре DICOM_WatchDog и монотонный прогресс сборки:**
   - Устранено появление черного окна с заголовком `"find 12948"` и мертвое зависание процесса обновления на клиенте: ненадежный цикл ожидания `tasklist | find` в батнике полностью заменен на проверенную Windows in-place rename архитектуру (адаптированную из [DICOM_WatchDog](https://github.com/Flacozyabra/DICOM_WatchDog)).
   - Процесс обновления теперь выполняется на лету: работающий файл `ASS_Client.exe` переименовывается в `_old_ASS_Client.exe` средствами Windows NTFS (разрешено ОС), а новый скачанный бинарник немедленно перемещается на целевое место. Запускается легковесный независимый сценарий `_restart_update_{pid}.bat` с очищенным окружением `get_clean_env()` (без `_MEIPASS`, `PYTHONPATH`, `PYTHONHOME`), который после 2-секундной задержки запускает новую версию через `start "" "{target}"` и самоудаляется.

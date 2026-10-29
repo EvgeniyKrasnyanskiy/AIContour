@@ -94,12 +94,17 @@ class ClientUpdater:
         """Возвращает путь к текущему исполняемому файлу клиента."""
         if self.is_frozen():
             return Path(sys.executable).resolve()
-        # Если запущено из исходного кода, возвращаем путь к возможному дистрибутиву в dist/
+        # Если запущено из исходного кода, возвращаем путь к возможному дистрибутиву в updates/client/ или dist/
         project_root = Path(__file__).resolve().parent.parent.parent
-        dist_exe = project_root / "dist" / "ASS_Client.exe"
-        if dist_exe.exists():
-            return dist_exe
-        return project_root / "dist" / "ASS_Client_Portable" / "ASS_Client.exe"
+        for candidate in [
+            project_root / "updates" / "client" / "ASS_Client_PyQt6.exe",
+            project_root / "updates" / "client" / "ASS_Client.exe",
+            project_root / "updates" / "client" / "ASS_Client_PyQt5.exe",
+            project_root / "dist" / "ASS_Client.exe",
+        ]:
+            if candidate.exists():
+                return candidate
+        return project_root / "updates" / "client" / "ASS_Client_PyQt6.exe"
 
     def check_for_update(self, server_url: str, timeout: float = 3.0) -> Optional[Dict[str, Any]]:
         """

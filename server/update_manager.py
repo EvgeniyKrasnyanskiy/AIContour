@@ -102,13 +102,13 @@ class UpdateManager:
                 tag = "PyQt6"
 
         if tag:
-            candidates.extend([
-                self.updates_dir / f"ASS_Client_{tag}.exe",
-                self.base_dir / "dist" / f"ASS_Client_{tag}.exe",
-            ])
+            candidates.append(self.updates_dir / f"ASS_Client_{tag}.exe")
 
+        # Приоритет поиска: PyQt6 -> ASS_Client -> PyQt5 -> dist (fallback)
         candidates.extend([
+            self.updates_dir / "ASS_Client_PyQt6.exe",
             self.updates_dir / "ASS_Client.exe",
+            self.updates_dir / "ASS_Client_PyQt5.exe",
             self.base_dir / "dist" / "ASS_Client.exe",
             self.base_dir / "dist" / "ASS_Client_Portable" / "ASS_Client.exe",
         ])
@@ -153,15 +153,11 @@ class UpdateManager:
         qt_flavor: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Копирует новый бинарник клиента в хранилище updates/client/ и обновляет метаданные.
-        Поддерживает раздельные имена ASS_Client_PyQt5.exe / ASS_Client_PyQt6.exe.
+        Сохраняет бинарник клиента в хранилище updates/client/ без дублирования.
+        Если указан qt_flavor ("PyQt5" или "PyQt6"), сохраняет в ASS_Client_{tag}.exe.
+        Иначе сохраняет в ASS_Client.exe.
         """
         import shutil
-        target_path = self.updates_dir / "ASS_Client.exe"
-        if source_path.resolve() != target_path.resolve():
-            shutil.copy2(str(source_path), str(target_path))
-        
-        # Если передан флаг Qt, также сохраняем ветку с суффиксом
         tag = None
         if qt_flavor:
             flv = str(qt_flavor).lower()
@@ -169,14 +165,16 @@ class UpdateManager:
                 tag = "PyQt5"
             elif "6" in flv:
                 tag = "PyQt6"
-        if tag:
-            qt_target = self.updates_dir / f"ASS_Client_{tag}.exe"
-            if source_path.resolve() != qt_target.resolve():
-                shutil.copy2(str(source_path), str(qt_target))
-        
+
+        target_name = f"ASS_Client_{tag}.exe" if tag else "ASS_Client.exe"
+        target_path = self.updates_dir / target_name
+
+        if source_path.resolve() != target_path.resolve():
+            shutil.copy2(str(source_path), str(target_path))
+
         sha256 = self._compute_sha256(target_path)
         size = target_path.stat().st_size
-        
+
         meta = {
             "version": version_str.strip().lstrip("vV"),
             "file_name": target_path.name,
@@ -190,3 +188,4 @@ class UpdateManager:
         self._save_metadata(meta)
         logger.info(f"Зарегистрировано новое обновление клиента ({meta['qt_flavor']}): v{meta['version']} ({size / (1024*1024):.1f} МБ)")
         return meta
+

@@ -659,17 +659,21 @@ def _run_build_client_job(qt_flavor: str):
             logger.error(f"[ClientBuilder] Сборка {tag} завершилась с ошибкой (код {proc.returncode})")
             return
             
-        dist_exe = base_dir / "dist" / "ASS_Client.exe"
-        if not dist_exe.exists():
-            logger.error(f"[ClientBuilder] Собранный файл dist/ASS_Client.exe не найден!")
-            return
+        target_exe = base_dir / "updates" / "client" / f"ASS_Client_{tag}.exe"
+        if not target_exe.exists():
+            dist_exe = base_dir / "dist" / "ASS_Client.exe"
+            if dist_exe.exists():
+                target_exe = dist_exe
+            else:
+                logger.error(f"[ClientBuilder] Собранный файл не найден в updates/client/ или dist/!")
+                return
 
         with _builder_lock:
             _build_progress[tag] = {"percent": 98, "stage": "Регистрация..."}
 
         cur_ver = get_version()
         meta = update_manager.register_client_binary(
-            source_path=dist_exe,
+            source_path=target_exe,
             version_str=cur_ver,
             is_critical=False,
             changelog=f"Автоматическая фоновая сборка {tag} актуальной версии v{cur_ver} для удаленного обновления.",

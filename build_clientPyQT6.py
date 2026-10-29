@@ -122,18 +122,23 @@ def build_executable(has_icon):
         pyinstaller_bin = str(pyinstaller_bin)
         print(f"[INFO] Обнаружен PyInstaller в venv: {pyinstaller_bin}")
         
+    output_dir = Path("updates") / "client"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     # Формируем аргументы
     args = [
         pyinstaller_bin,
         "--noconfirm",
         "--onefile",
         "--windowed",
+        f"--distpath={str(output_dir)}",
+        "--workpath=build",
+        "--name=ASS_Client_PyQt6",
         "--add-data=icon_client.ico;.",
         "--add-data=icon_client.png;.",
         "--add-data=app_icon.ico;.",
         "--add-data=app_icon.png;.",
         "--add-data=version.txt;.",
-        "--name=ASS_Client",
     ]
     
     # Системные библиотеки VC++ Redistributable и ICU не добавляются в PyQt6 сборку
@@ -180,7 +185,12 @@ def build_executable(has_icon):
     if sys.platform == "win32":
         call_kwargs["creationflags"] = 0x08000000
     subprocess.check_call(args, **call_kwargs)
-    print("[OK] Компиляция .exe успешно завершена.")
+
+    exe_file = output_dir / "ASS_Client_PyQt6.exe"
+    if not exe_file.exists():
+        raise RuntimeError(f"[ERROR] Собранный файл {exe_file} не найден!")
+    print(f"[OK] Компиляция .exe успешно завершена: {exe_file.resolve()}")
+    return exe_file
 
 def package_portable_zip():
     print_banner("4. Подготовка переносимого (Portable) ZIP-дистрибутива")
@@ -310,6 +320,38 @@ def patch_qt6_dll():
     except Exception as e:
         print(f"[ERROR] Не удалось применить патч к Qt6Core.dll: {e}")
 
+def register_build_metadata(exe_file: Path, tag: str = "PyQt6"):
+    import hashlib
+    import json
+    import time
+
+    if not exe_file.exists():
+        return
+
+    size = exe_file.stat().st_size
+    hasher = hashlib.sha256()
+    with open(exe_file, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            hasher.update(chunk)
+    sha256 = hasher.hexdigest()
+
+    version_file = Path("version.txt")
+    ver = version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "2.0.0"
+
+    meta_file = exe_file.parent / "version.json"
+    meta = {
+        "version": ver.lstrip("vV"),
+        "file_name": exe_file.name,
+        "qt_flavor": tag,
+        "file_size": size,
+        "sha256": sha256,
+        "is_critical": False,
+        "changelog": f"Сборка клиента {tag} v{ver}.",
+        "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
+    meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[OK] Метаданные сборки сохранены в {meta_file.resolve()}")
+
 def main():
     try:
         # Убедимся, что рабочая директория — это корень проекта
@@ -327,11 +369,12 @@ def main():
         patch_qt6_dll()
         
         has_icon = generate_ico_icon()
-        build_executable(has_icon)
-        # Упаковка в ZIP отключена: в dist создается только автономный ASS_Client.exe
-        # package_portable_zip()
+        exe_file = build_executable(has_icon)
         
-        print_banner("СБОРКА УСПЕШНО ВЫПОЛНЕНА! ИСПОЛНЯЕМЫЙ ФАЙЛ В ПАПКЕ dist/")
+        # Регистрируем метаданные в updates/client/version.json
+        register_build_metadata(exe_file, tag="PyQt6")
+        
+        print_banner(f"СБОРКА УСПЕШНО ВЫПОЛНЕНА! ИСПОЛНЯЕМЫЙ ФАЙЛ: {exe_file.resolve()}")
         
     except Exception as e:
         print(f"\n[FATAL ERROR] Произошел критический сбой при сборке: {e}")
