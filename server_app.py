@@ -2715,12 +2715,16 @@ if PYQT_AVAILABLE:
             left_layout = QVBoxLayout(self.left_card)
             left_layout.setContentsMargins(5, 5, 5, 5)
 
-            # Панель управления сервером (кнопка паузы + адрес API)
+            # Панель управления сервером (кнопка паузы + кнопка перезапуска + адрес API)
             server_header_widget = QWidget()
             server_header_layout = QVBoxLayout(server_header_widget)
             server_header_layout.setContentsMargins(10, 5, 10, 5)
             server_header_layout.setSpacing(4)
             
+            btn_row_layout = QHBoxLayout()
+            btn_row_layout.setContentsMargins(0, 0, 0, 0)
+            btn_row_layout.setSpacing(6)
+
             self.btn_pause_toggle = QPushButton("СЕРВЕР АКТИВЕН 🟢")
             self.btn_pause_toggle.setObjectName("btnPauseActive")
             self.btn_pause_toggle.setStyleSheet("""
@@ -2734,11 +2738,46 @@ if PYQT_AVAILABLE:
                 }
             """)
             self.btn_pause_toggle.clicked.connect(self.toggle_pause)
-            
+
+            self.btn_restart_server = QPushButton("🔄 Перезапуск")
+            self.btn_restart_server.setObjectName("btnRestartServer")
+            self.btn_restart_server.setToolTip("Быстрый перезапуск сервера (Ctrl + Клик мышью, либо Ctrl+Shift+R)")
+            self.btn_restart_server.setStyleSheet("""
+                QPushButton#btnRestartServer {
+                    background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #2c2c2e, stop: 1 #1c1c1e);
+                    border: 1px solid #3a3a3c;
+                    border-radius: 4px;
+                    color: #d1d1d6;
+                    padding: 8px 14px;
+                    font-size: 12px;
+                    font-weight: bold;
+                }
+                QPushButton#btnRestartServer:hover {
+                    background-color: #007acc;
+                    border: 1px solid #3498db;
+                    color: #ffffff;
+                }
+                QPushButton#btnRestartServer:pressed {
+                    background-color: #005999;
+                    border: 1px solid #1f618d;
+                }
+            """)
+            self.btn_restart_server.clicked.connect(self.on_restart_server_clicked)
+
+            btn_row_layout.addWidget(self.btn_pause_toggle, 1)
+            btn_row_layout.addWidget(self.btn_restart_server)
+
+            # Горячие клавиши для перезапуска сервера
+            from PyQt6.QtGui import QShortcut, QKeySequence
+            self.shortcut_restart = QShortcut(QKeySequence("Ctrl+Shift+R"), self)
+            self.shortcut_restart.activated.connect(lambda: self.restart_server(is_forced_by_hotkey=True))
+            self.shortcut_restart_alt = QShortcut(QKeySequence("Ctrl+Alt+R"), self)
+            self.shortcut_restart_alt.activated.connect(lambda: self.restart_server(is_forced_by_hotkey=True))
+
             self.lbl_server_address = QLabel("Инициализация сервера...")
             self.lbl_server_address.setStyleSheet("font-size: 12px; color: #3498db; font-weight: 500;")
             
-            server_header_layout.addWidget(self.btn_pause_toggle)
+            server_header_layout.addLayout(btn_row_layout)
             server_header_layout.addWidget(self.lbl_server_address)
             left_layout.addWidget(server_header_widget)
 
@@ -8095,6 +8134,10 @@ version = {sys.version.split()[0]}
             dialog.exec()
 
         def closeEvent(self, event):
+            if getattr(self, '_is_restarting', False):
+                event.accept()
+                return
+
             from PyQt6.QtWidgets import QMessageBox
             reply = QMessageBox.question(
                 self, 'Подтверждение выхода',
@@ -8197,6 +8240,112 @@ version = {sys.version.split()[0]}
                 
             import threading
             threading.Thread(target=worker, daemon=True).start()
+
+        def on_restart_server_clicked(self):
+            """Обработка клика по кнопке перезапуска с проверкой зажатого Ctrl."""
+            from PyQt6.QtCore import Qt
+            from PyQt6.QtWidgets import QApplication, QMessageBox
+            
+            modifiers = QApplication.keyboardModifiers()
+            has_ctrl = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+            
+            if not has_ctrl:
+                QMessageBox.information(
+                    self,
+                    "Защита от случайного нажатия",
+                    "Для перезапуска сервера удерживайте клавишу <b>Ctrl</b> при клике мышью.<br><br>"
+                    "Либо используйте комбинацию горячих клавиш <b>Ctrl+Shift+R</b> (или <b>Ctrl+Alt+R</b>)."
+                )
+                return
+                
+            self.restart_server(is_forced_by_hotkey=False)
+
+        def restart_server(self, is_forced_by_hotkey: bool = False):
+            """Выполняет безопасный перезапуск GUI и серверного бэкенда."""
+            from PyQt6.QtWidgets import QMessageBox
+            
+            has_active_processing = False
+            try:
+                if hasattr(self, 'table_queue'):
+                    for row in range(self.table_queue.rowCount()):
+                        status_item = self.table_queue.item(row, 4)
+                        if status_item and status_item.text().strip().upper() == "PROCESSING":
+                            has_active_processing = True
+                            break
+            except Exception:
+                pass
+                
+            if has_active_processing:
+                reply = QMessageBox.warning(
+                    self,
+                    "Идет расчет задачи",
+                    "Внимание! В данный момент сервер выполняет оконтуривание снимка.<br>"
+                    "Перезапуск сервера прервет текущую операцию.<br><br>"
+                    "Вы действительно хотите продолжить перезапуск?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
+
+            logging.info("Инициирован быстрый перезапуск сервера...")
+            self._is_restarting = True
+            
+            try:
+                self.save_settings()
+            except Exception as se:
+                logging.error(f"Не удалось сохранить настройки при перезапуске: {se}")
+                
+            if hasattr(self, 'active_workers'):
+                for w in list(self.active_workers):
+                    try:
+                        if w.isRunning():
+                            w.cancel()
+                            w.wait(1000)
+                    except Exception:
+                        pass
+
+            if hasattr(self, "server_process") and self.server_process:
+                logging.info("Останавливаем фоновый процесс бэкенда сервера...")
+                pid = self.server_process.pid
+                if os.name == 'nt':
+                    import subprocess as sp
+                    sp.run(
+                        ["taskkill", "/F", "/T", "/PID", str(pid)],
+                        shell=False,
+                        stdout=sp.DEVNULL,
+                        stderr=sp.DEVNULL
+                    )
+                else:
+                    self.server_process.terminate()
+                try:
+                    self.server_process.wait(timeout=2)
+                except Exception:
+                    self.server_process.kill()
+                    
+            if hasattr(self, "server_stdout_file") and self.server_stdout_file:
+                try:
+                    self.server_stdout_file.close()
+                except Exception:
+                    pass
+
+            try:
+                app_dir = Path(__file__).resolve().parent
+                if hasattr(sys, '_MEIPASS'):
+                    cmd = [sys.executable] + sys.argv[1:]
+                else:
+                    cmd = [sys.executable, str(Path(__file__).resolve())] + sys.argv[1:]
+                    
+                subprocess.Popen(cmd, cwd=str(app_dir))
+                logging.info(f"Запущен новый экземпляр сервера: {' '.join(cmd)}")
+            except Exception as launch_err:
+                logging.error(f"Ошибка при запуске нового процесса сервера: {launch_err}")
+                QMessageBox.critical(self, "Ошибка перезапуска", f"Не удалось запустить новый процесс: {launch_err}")
+                self._is_restarting = False
+                return
+
+            from PyQt6.QtWidgets import QApplication
+            QApplication.quit()
 
         def update_gui_after_pause(self, success, current_paused):
             """Вызывается строго в главном потоке GUI при получении сигнала от фонового worker-а."""
