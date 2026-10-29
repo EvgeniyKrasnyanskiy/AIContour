@@ -23,6 +23,54 @@ from version import get_version, is_newer_version
 logger = logging.getLogger("ClientUpdater")
 
 
+def cleanup_old_exe(target_dir: Optional[Path] = None):
+    """
+    Очищает остаточные бинарники вида _old_*.exe, оставшиеся после бесшовного обновления.
+    Вызывается при старте приложения.
+    """
+    try:
+        if target_dir is None:
+            if getattr(sys, 'frozen', False):
+                dest_dir = Path(sys.executable).resolve().parent
+            else:
+                dest_dir = Path(__file__).resolve().parent.parent.parent / "dist"
+        else:
+            dest_dir = Path(target_dir).resolve()
+
+        if not dest_dir.exists():
+            return
+
+        for p in dest_dir.glob("_old_*.exe"):
+            try:
+                p.unlink(missing_ok=True)
+                logger.info(f"Удален временный файл старой версии: {p}")
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug(f"Ошибка при очистке старых бинарников: {e}")
+
+
+def get_clean_env() -> Dict[str, str]:
+    """Возвращает очищенный словарь переменных окружения без служебных путей PyInstaller."""
+    env = os.environ.copy()
+    meipass = getattr(sys, '_MEIPASS', None)
+
+    for key in list(env.keys()):
+        key_upper = key.upper()
+        if 'MEI' in key_upper or 'PYI' in key_upper or key_upper in ('PYTHONPATH', 'PYTHONHOME'):
+            env.pop(key, None)
+
+    if 'PATH' in env:
+        path_list = env['PATH'].split(os.pathsep)
+        cleaned_paths = [
+            p for p in path_list
+            if '_mei' not in p.lower() and (not meipass or os.path.normpath(p) != os.path.normpath(meipass))
+        ]
+        env['PATH'] = os.pathsep.join(cleaned_paths)
+
+    return env
+
+
 class ClientUpdater:
     """
     Класс для управления клиентскими обновлениями:
@@ -126,70 +174,88 @@ class ClientUpdater:
 
     def apply_update_and_restart(self, target_exe: Optional[Path] = None, spawn_process: bool = True) -> bool:
         """
-        Создает и запускает скрытый пакетный сценарий updater.bat,
-        который дождется завершения текущего процесса, заменит бинарник и перезапустит приложение.
+        Применяет обновление методом in-place rename (архитектура DICOM_WatchDog):
+        1. Переименовывает текущий запущенный exe в _old_{name}.exe (разрешено ОС Windows).
+        2. Перемещает скачанный файл обновления на место целевого exe.
+        3. Запускает скрипт _restart_update_{pid}.bat с задержкой 2 сек и очищенными переменными окружения PyInstaller.
         """
         staged = self.staged_file
         if not staged.exists() or staged.stat().st_size == 0:
             logger.error("Файл обновления не найден во временной папке.")
             return False
 
-        target = target_exe or self.get_executable_path()
+        target = Path(target_exe).resolve() if target_exe else self.get_executable_path().resolve()
         if not target.exists() and not self.is_frozen():
             logger.warning("Запуск из исходных кодов без готового dist/*.exe: применение обновления пропущено.")
             return False
 
+        dest_dir = target.parent
+        old_exe_path = dest_dir / f"_old_{target.name}"
+
+        # 1. Удаляем предыдущий _old_ файл, если остался
+        try:
+            if old_exe_path.exists():
+                old_exe_path.unlink(missing_ok=True)
+        except Exception as e:
+            logger.warning(f"Не удалось удалить предыдущий {old_exe_path}: {e}")
+
+        # 2. Переименовываем работающий exe (разрешено в Windows NTFS)
+        try:
+            if target.exists():
+                os.rename(str(target), str(old_exe_path))
+        except Exception as e:
+            logger.error(f"Не удалось переименовать текущий exe во временный ({e})")
+            return False
+
+        # 3. Перемещаем скачанный файл на место целевого exe
+        try:
+            shutil.move(str(staged), str(target))
+        except Exception as e:
+            logger.error(f"Не удалось поместить новый exe на место целевого: {e}")
+            # Откат: возвращаем старый exe на место
+            try:
+                if old_exe_path.exists():
+                    os.rename(str(old_exe_path), str(target))
+            except Exception as rollback_err:
+                logger.error(f"Ошибка отката: {rollback_err}")
+            return False
+
+        # 4. Формируем батник перезапуска и очистки
         pid = os.getpid()
-        batch_path = self.temp_update_dir / f"updater_{pid}.bat"
+        bat_path = dest_dir / f"_restart_update_{pid}.bat"
 
-        # Скрипт безопасной замены и перезапуска в Windows
         bat_content = f"""@echo off
-chcp 65001 > nul
-set PID={pid}
-set STAGED="{str(staged.resolve())}"
-set TARGET="{str(target.resolve())}"
-
-:: Ожидание закрытия старого процесса
-:WAIT_LOOP
-tasklist /fi "PID eq %PID%" | find "%PID%" > nul
-if not errorlevel 1 (
-    timeout /t 1 /nobreak > nul
-    goto WAIT_LOOP
-)
-
-:: Замена исполняемого файла
-copy /y %STAGED% %TARGET% > nul
-if errorlevel 1 (
-    timeout /t 1 /nobreak > nul
-    copy /y %STAGED% %TARGET% > nul
-)
-
-:: Удаление временного файла
-del /f /q %STAGED% > nul
-
-:: Перезапуск обновленного клиента
-start "" %TARGET%
-
-:: Самоудаление батника
-del /f /q "%~f0" > nul
-exit
+set "_MEIPASS="
+set "_MEIPASS2="
+set "_PYI_ARCHIVE_FILE="
+set "_PYI_SPLASH_IPC="
+set "PYINSTALLER_STRICT_UNPACK_MODE="
+set "PYTHONPATH="
+set "PYTHONHOME="
+timeout /t 2 /nobreak > nul
+if exist "{str(old_exe_path)}" del /f /q "{str(old_exe_path)}" > nul 2>&1
+start "" "{str(target)}"
+(goto) 2>nul & del "%~f0"
 """
         try:
-            batch_path.write_text(bat_content, encoding="utf-8")
-            logger.info(f"Создан скрипт обновления: {batch_path}")
+            bat_path.write_text(bat_content, encoding="utf-8")
+            logger.info(f"Создан скрипт перезапуска: {bat_path}")
 
             if not spawn_process:
                 return True
 
-            # Запуск батника в отдельном независимом процессе Windows
+            clean_env = get_clean_env()
             DETACHED_PROCESS = 0x00000008
             CREATE_NO_WINDOW = 0x08000000
             subprocess.Popen(
-                ["cmd.exe", "/c", str(batch_path.resolve())],
+                ["cmd.exe", "/c", str(bat_path.resolve())],
+                env=clean_env,
+                cwd=str(dest_dir),
                 creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
                 close_fds=True
             )
             return True
         except Exception as e:
-            logger.error(f"Не удалось запустить updater.bat: {e}")
+            logger.error(f"Не удалось запустить скрипт перезапуска: {e}")
             return False
+

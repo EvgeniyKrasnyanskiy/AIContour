@@ -62,6 +62,11 @@ class BlacklistManager:
             if qt_flavor:
                 self.client_metadata[client_id]["qt_flavor"] = str(qt_flavor)
 
+            # Если команда уже была отправлена клиенту (delivery_count >= 1) и клиент прислал целевую версию
+            pending = self.pending_updates.get(client_id)
+            if pending and pending.get("delivery_count", 0) >= 1 and version and version == pending.get("version"):
+                self.pending_updates.pop(client_id, None)
+
     def queue_client_update(self, client_id: str, target_version: str, qt_flavor: Optional[str] = None, auto_apply: bool = True, force: bool = True):
         if client_id:
             self.pending_updates[client_id] = {
@@ -92,6 +97,12 @@ class BlacklistManager:
             self.active_clients[client_id] = time.time()
         
     def get_clients_info(self):
+        # Очистка устаревших/зависших задач обновления (таймаут 45 секунд)
+        now_ts = time.time()
+        for cid_p in list(self.pending_updates.keys()):
+            if now_ts - self.pending_updates[cid_p].get("queued_at", 0) > 45.0:
+                self.pending_updates.pop(cid_p, None)
+
         info = []
         # Сначала заблокированные
         for cid in sorted(self.blacklisted_ids):
@@ -610,39 +621,35 @@ def _run_build_client_job(qt_flavor: str):
                     continue
 
                 line_lower = line.lower()
+                new_percent = None
+                new_stage = None
+
                 if "0. обновление версии" in line_lower or "сборка текущей актуальной" in line_lower:
-                    current_percent = 10
-                    current_stage = "Версия"
+                    new_percent, new_stage = 10, "Версия"
                 elif "1. проверка и установка" in line_lower:
-                    current_percent = 20
-                    current_stage = "Зависимости"
+                    new_percent, new_stage = 18, "Зависимости"
                 elif "2.5. патч qt" in line_lower or "патч qt6core" in line_lower:
-                    current_percent = 30
-                    current_stage = "Патч DLL"
+                    new_percent, new_stage = 28, "Патч DLL"
                 elif "2. генерация иконки" in line_lower:
-                    current_percent = 40
-                    current_stage = "Иконки"
+                    new_percent, new_stage = 38, "Иконки"
                 elif "3. запуск компиляции" in line_lower or "pyinstaller в venv" in line_lower:
-                    current_percent = 48
-                    current_stage = "PyInstaller"
-                elif "collect_submodules" in line_lower or "подмодулей" in line_lower:
-                    current_percent = 55
-                    current_stage = "Анализ модулей"
-                elif "building analysis" in line_lower or "analyzing" in line_lower:
-                    current_percent = 65
-                    current_stage = "Анализ кода"
-                elif "processing" in line_lower or "dynamic libraries" in line_lower:
-                    current_percent = 75
-                    current_stage = "Сборка DLL"
-                elif "building pkg" in line_lower or "archive" in line_lower:
-                    current_percent = 84
-                    current_stage = "Упаковка PKG"
-                elif "building exe" in line_lower or "appending" in line_lower:
-                    current_percent = 92
-                    current_stage = "Линковка EXE"
-                elif "успешно выполнена" in line_lower:
-                    current_percent = 97
-                    current_stage = "Завершение"
+                    new_percent, new_stage = 46, "PyInstaller"
+                elif current_percent >= 45 and ("collect_submodules" in line_lower or "подмодулей" in line_lower):
+                    new_percent, new_stage = 55, "Анализ модулей"
+                elif current_percent >= 45 and ("building analysis" in line_lower or "analyzing" in line_lower):
+                    new_percent, new_stage = 65, "Анализ кода"
+                elif current_percent >= 50 and ("dynamic libraries" in line_lower or "looking for dynamic" in line_lower):
+                    new_percent, new_stage = 75, "Сборка DLL"
+                elif current_percent >= 60 and ("building pkg" in line_lower or "carchive" in line_lower):
+                    new_percent, new_stage = 84, "Упаковка PKG"
+                elif current_percent >= 70 and ("building exe" in line_lower or "appending" in line_lower or "appending archive" in line_lower):
+                    new_percent, new_stage = 92, "Линковка EXE"
+                elif "успешно выполнена" in line_lower or "успешно завершена" in line_lower:
+                    new_percent, new_stage = 97, "Завершение"
+
+                if new_percent is not None and new_percent > current_percent:
+                    current_percent = new_percent
+                    current_stage = new_stage
 
                 with _builder_lock:
                     _build_progress[tag] = {"percent": current_percent, "stage": current_stage}

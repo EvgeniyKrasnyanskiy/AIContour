@@ -212,7 +212,7 @@ try:
     PYQT_AVAILABLE = True
     from src.ui.styles import StyleManager
     from src.network.api_client import NetworkStatusWorker
-    from src.updater.client_updater import ClientUpdater
+    from src.updater.client_updater import ClientUpdater, cleanup_old_exe
     from version import get_version, is_newer_version
 
     class UpdateCheckerThread(QThread):
@@ -306,6 +306,11 @@ except ImportError:
     PYQT_AVAILABLE = False
 
 if __name__ == "__main__" and PYQT_AVAILABLE:
+    try:
+        cleanup_old_exe()
+    except Exception:
+        pass
+
     try:
         import ctypes
         try:
@@ -1876,6 +1881,10 @@ if PYQT_AVAILABLE:
             self.failed_status_checks = 0
             
             # Инициализация модуля автообновлений
+            try:
+                cleanup_old_exe()
+            except Exception:
+                pass
             self.updater = ClientUpdater(get_version())
             self.staged_update_version = None
             self.available_update_version = None
