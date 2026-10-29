@@ -1540,8 +1540,8 @@ if PYQT_AVAILABLE:
             self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
             self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
             self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-            self.table.setColumnWidth(1, 110)
-            self.table.setColumnWidth(2, 180)
+            self.table.setColumnWidth(1, 140)
+            self.table.setColumnWidth(2, 160)
             
             # Настройка внешнего вида таблицы
             self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -1589,13 +1589,30 @@ if PYQT_AVAILABLE:
             from totalsegmentator.config import get_weights_dir
             weights_dir = get_weights_dir()
             
+            has_license = bool(
+                getattr(self.engine, "licenses", "").strip() if hasattr(self, "engine") and self.engine else ""
+            )
+            if not has_license:
+                try:
+                    from totalsegmentator.libs import get_totalseg_dir
+                    import json
+                    cfg_p = get_totalseg_dir() / "config.json"
+                    if cfg_p.exists():
+                        with open(cfg_p, "r", encoding="utf-8") as f:
+                            has_license = bool(json.load(f).get("license_number"))
+                except Exception:
+                    pass
+
             self.table.setRowCount(len(MODELS_LIST))
             
             for row, model in enumerate(MODELS_LIST):
                 # 1. Название и описание
                 name_text = model["name"]
                 if model["licensed"]:
-                    name_text += " 🔑 (Нужна лицензия)"
+                    if has_license:
+                        name_text += " 🔑 (Лицензия активна ✓)"
+                    else:
+                        name_text += " 🔑 (Нужна лицензия)"
                 
                 name_item = QTableWidgetItem(name_text)
                 name_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
