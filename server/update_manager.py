@@ -87,31 +87,44 @@ class UpdateManager:
                 hasher.update(chunk)
         return hasher.hexdigest()
 
-    def get_client_binary_path(self) -> Optional[Path]:
+    def get_client_binary_path(self, qt_flavor: Optional[str] = None) -> Optional[Path]:
         """
         Возвращает путь к актуальному исполняемому файлу клиента для скачивания.
-        Порядок поиска:
-        1. Сначала ищет полноценный бинарник (> 1 МБ) среди updates/client/ASS_Client.exe,
-           dist/ASS_Client.exe, dist/ASS_Client_Portable/ASS_Client.exe.
-        2. Fallback: любой существующий файл из списка кандидатов.
+        При указании qt_flavor ("PyQt5" или "PyQt6") приоритетно ищет дистрибутив соответствующей ветки.
         """
-        candidates = [
+        candidates = []
+        tag = None
+        if qt_flavor:
+            flv = str(qt_flavor).lower()
+            if "5" in flv:
+                tag = "PyQt5"
+            elif "6" in flv:
+                tag = "PyQt6"
+
+        if tag:
+            candidates.extend([
+                self.updates_dir / f"ASS_Client_{tag}.exe",
+                self.base_dir / "dist" / f"ASS_Client_{tag}.exe",
+            ])
+
+        candidates.extend([
             self.updates_dir / "ASS_Client.exe",
             self.base_dir / "dist" / "ASS_Client.exe",
             self.base_dir / "dist" / "ASS_Client_Portable" / "ASS_Client.exe",
-        ]
+        ])
+
         for p in candidates:
             if p.exists() and p.is_file() and p.stat().st_size > 0:
                 return p
         return None
 
-    def get_update_info(self, client_version: Optional[str] = None) -> Dict[str, Any]:
+    def get_update_info(self, client_version: Optional[str] = None, qt_flavor: Optional[str] = None) -> Dict[str, Any]:
         """
-        Возвращает информацию о доступном обновлении для клиента.
+        Возвращает информацию о доступном обновлении для клиента с учетом ветки Qt.
         """
         meta = self._load_metadata()
         latest_version = meta.get("version", get_version())
-        binary_path = self.get_client_binary_path()
+        binary_path = self.get_client_binary_path(qt_flavor=qt_flavor)
         has_binary = binary_path is not None and binary_path.exists()
 
         is_available = False
@@ -122,29 +135,52 @@ class UpdateManager:
             "has_update": is_available,
             "latest_version": latest_version,
             "server_version": get_version(),
+            "qt_flavor": qt_flavor or meta.get("qt_flavor", "PyQt6"),
             "is_critical": meta.get("is_critical", False),
-            "file_name": meta.get("file_name", "ASS_Client.exe"),
-            "file_size": meta.get("file_size", binary_path.stat().st_size if binary_path else 0),
+            "file_name": binary_path.name if binary_path else "ASS_Client.exe",
+            "file_size": binary_path.stat().st_size if binary_path else 0,
             "sha256": meta.get("sha256", ""),
             "changelog": meta.get("changelog", ""),
             "updated_at": meta.get("updated_at", "")
         }
 
-    def register_client_binary(self, source_path: Path, version_str: str, is_critical: bool = False, changelog: str = "") -> Dict[str, Any]:
+    def register_client_binary(
+        self, 
+        source_path: Path, 
+        version_str: str, 
+        is_critical: bool = False, 
+        changelog: str = "",
+        qt_flavor: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Копирует новый бинарник клиента в хранилище updates/client/ и обновляет метаданные.
+        Поддерживает раздельные имена ASS_Client_PyQt5.exe / ASS_Client_PyQt6.exe.
         """
         import shutil
         target_path = self.updates_dir / "ASS_Client.exe"
         if source_path.resolve() != target_path.resolve():
             shutil.copy2(str(source_path), str(target_path))
         
+        # Если передан флаг Qt, также сохраняем ветку с суффиксом
+        tag = None
+        if qt_flavor:
+            flv = str(qt_flavor).lower()
+            if "5" in flv:
+                tag = "PyQt5"
+            elif "6" in flv:
+                tag = "PyQt6"
+        if tag:
+            qt_target = self.updates_dir / f"ASS_Client_{tag}.exe"
+            if source_path.resolve() != qt_target.resolve():
+                shutil.copy2(str(source_path), str(qt_target))
+        
         sha256 = self._compute_sha256(target_path)
         size = target_path.stat().st_size
         
         meta = {
             "version": version_str.strip().lstrip("vV"),
-            "file_name": "ASS_Client.exe",
+            "file_name": target_path.name,
+            "qt_flavor": tag or "PyQt6",
             "file_size": size,
             "sha256": sha256,
             "is_critical": is_critical,
@@ -152,5 +188,5 @@ class UpdateManager:
             "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
         }
         self._save_metadata(meta)
-        logger.info(f"Зарегистрировано новое обновление клиента: v{meta['version']} ({size / (1024*1024):.1f} МБ)")
+        logger.info(f"Зарегистрировано новое обновление клиента ({meta['qt_flavor']}): v{meta['version']} ({size / (1024*1024):.1f} МБ)")
         return meta

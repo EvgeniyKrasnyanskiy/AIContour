@@ -1183,7 +1183,7 @@ if PYQT_AVAILABLE:
             super().__init__(parent)
             self.server_url = server_url.rstrip('/')
             self.setWindowTitle("👥 Подключенные клиенты и блокировка")
-            self.setMinimumSize(650, 400)
+            self.setMinimumSize(850, 420)
             self.init_ui()
             
             # Таймер для автообновления
@@ -1210,9 +1210,22 @@ if PYQT_AVAILABLE:
             
             # Таблица клиентов
             self.table = QTableWidget()
-            self.table.setColumnCount(4)
-            self.table.setHorizontalHeaderLabels(["Client ID (Имя ПК)", "Последняя активность", "Статус", "Действие"])
-            self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+            self.table.setColumnCount(6)
+            self.table.setHorizontalHeaderLabels([
+                "Client ID (Имя ПК)", 
+                "Версия / Qt", 
+                "Последняя активность", 
+                "Статус", 
+                "Обновление", 
+                "Блокировка"
+            ])
+            header = self.table.horizontalHeader()
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
             self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
             self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             self.table.setStyleSheet("""
@@ -1265,17 +1278,26 @@ if PYQT_AVAILABLE:
             
             for row, client in enumerate(clients):
                 client_id = client.get("client_id", "Неизвестно")
+                ver = client.get("version", "—")
+                qt_flv = client.get("qt_flavor", "PyQt6")
                 last_act = client.get("last_activity", "—")
                 status = client.get("status", "Активен")
+                has_pending = client.get("has_pending_update", False)
                 
                 # Колонки
                 item_id = QTableWidgetItem(client_id)
                 item_id.setForeground(QBrush(QColor("#ffffff")))
                 self.table.setItem(row, 0, item_id)
+
+                display_ver = f"v{ver} ({qt_flv})" if ver and ver != "—" else f"({qt_flv})"
+                item_ver = QTableWidgetItem(display_ver)
+                item_ver.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item_ver.setForeground(QBrush(QColor("#00d2d3")))
+                self.table.setItem(row, 1, item_ver)
                 
                 item_act = QTableWidgetItem(last_act)
                 item_act.setForeground(QBrush(QColor("#a0a0a0")))
-                self.table.setItem(row, 1, item_act)
+                self.table.setItem(row, 2, item_act)
                 
                 item_status = QTableWidgetItem(status)
                 if status == "Заблокирован":
@@ -1284,9 +1306,55 @@ if PYQT_AVAILABLE:
                     item_status.setForeground(QBrush(QColor("#888888")))
                 else:
                     item_status.setForeground(QBrush(QColor("#2ecc71")))
-                self.table.setItem(row, 2, item_status)
+                self.table.setItem(row, 3, item_status)
+
+                # Колонка обновления
+                if status == "Заблокирован":
+                    item_no_up = QTableWidgetItem("—")
+                    item_no_up.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    item_no_up.setForeground(QBrush(QColor("#666666")))
+                    self.table.setItem(row, 4, item_no_up)
+                else:
+                    btn_update = QPushButton()
+                    btn_update.setCursor(Qt.CursorShape.PointingHandCursor)
+                    if has_pending:
+                        btn_update.setText("⏳ Ожидание...")
+                        btn_update.setToolTip("Клиент получил команду на обновление и скачает его при следующем обращении к серверу.")
+                        btn_update.setStyleSheet("""
+                            QPushButton {
+                                background-color: #d35400;
+                                color: white;
+                                border: none;
+                                border-radius: 4px;
+                                padding: 4px 8px;
+                                font-size: 11px;
+                                font-weight: bold;
+                            }
+                            QPushButton:hover {
+                                background-color: #e67e22;
+                            }
+                        """)
+                    else:
+                        btn_update.setText("🔄 Обновить клиент")
+                        btn_update.setToolTip(f"Инициировать сборку/отправку обновления клиента ({qt_flv}) по сети.")
+                        btn_update.setStyleSheet("""
+                            QPushButton {
+                                background-color: #2980b9;
+                                color: white;
+                                border: none;
+                                border-radius: 4px;
+                                padding: 4px 8px;
+                                font-size: 11px;
+                                font-weight: bold;
+                            }
+                            QPushButton:hover {
+                                background-color: #3498db;
+                            }
+                        """)
+                    btn_update.clicked.connect(lambda checked, cid=client_id, flv=qt_flv: self.trigger_client_update(cid, flv))
+                    self.table.setCellWidget(row, 4, btn_update)
                 
-                # Кнопка действия
+                # Кнопка действия (Блокировка)
                 btn_action = QPushButton()
                 btn_action.setCursor(Qt.CursorShape.PointingHandCursor)
                 if status == "Заблокирован":
@@ -1322,7 +1390,79 @@ if PYQT_AVAILABLE:
                     """)
                     btn_action.clicked.connect(lambda checked, cid=client_id: self.block_client(cid))
                     
-                self.table.setCellWidget(row, 3, btn_action)
+                self.table.setCellWidget(row, 5, btn_action)
+
+        def trigger_client_update(self, client_id: str, qt_flavor: str):
+            import requests
+            # Проверяем наличие готового бинарника на сервере
+            has_ready_binary = False
+            latest_ver = ""
+            try:
+                url_info = f"{self.server_url}/api/updates/client/info?qt={qt_flavor}"
+                headers = {"X-Client-ID": "ServerAdmin"}
+                r_info = requests.get(url_info, headers=headers, timeout=3)
+                if r_info.status_code == 200:
+                    d = r_info.json()
+                    latest_ver = d.get("latest_version", "")
+                    has_ready_binary = (d.get("file_size", 0) > 0)
+            except Exception:
+                has_ready_binary = False
+
+            tag = "PyQt5" if "5" in str(qt_flavor).lower() else "PyQt6"
+
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Обновление клиента по сети")
+            
+            if has_ready_binary:
+                msg_box.setText(
+                    f"Для клиента <b>{client_id}</b> ({tag}) на сервере доступен готовый файл v{latest_ver}."
+                )
+                msg_box.setInformativeText(
+                    "Отправить существующий файл клиенту или скомпилировать заново через PyInstaller?"
+                )
+                btn_send_ready = msg_box.addButton("🚀 Отправить готовый", QMessageBox.ButtonRole.ActionRole)
+                btn_rebuild = msg_box.addButton("🔨 Собрать заново и отправить", QMessageBox.ButtonRole.ActionRole)
+                btn_cancel = msg_box.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+                msg_box.setDefaultButton(btn_send_ready)
+                msg_box.exec()
+
+                clicked_btn = msg_box.clickedButton()
+                if clicked_btn == btn_cancel or clicked_btn is None:
+                    return
+                force_rebuild = (clicked_btn == btn_rebuild)
+            else:
+                msg_box.setText(
+                    f"Скомпилировать новый исполняемый файл клиента (ветка {tag}) на сервере и обновить <b>{client_id}</b> по сети?"
+                )
+                msg_box.setInformativeText(
+                    "Сервер запустит компиляцию в фоновом режиме. После сборки клиент автоматически скачает обновление и перезапустится."
+                )
+                btn_build = msg_box.addButton("🔨 Собрать и обновить", QMessageBox.ButtonRole.ActionRole)
+                btn_cancel = msg_box.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
+                msg_box.setDefaultButton(btn_build)
+                msg_box.exec()
+
+                if msg_box.clickedButton() != btn_build:
+                    return
+                force_rebuild = True
+
+            try:
+                url = f"{self.server_url}/api/server/clients/{client_id}/update"
+                payload = {"force_rebuild": force_rebuild, "qt_flavor": tag}
+                headers = {"X-Client-ID": "ServerAdmin", "Content-Type": "application/json"}
+                r = requests.post(url, json=payload, headers=headers, timeout=5)
+                if r.status_code == 200:
+                    res_json = r.json()
+                    QMessageBox.information(
+                        self, 
+                        "Обновление запущено", 
+                        res_json.get("message", "Команда обновления принята сервером.")
+                    )
+                    self.refresh_clients()
+                else:
+                    QMessageBox.warning(self, "Ошибка", f"Сервер вернул ошибку: {r.text}")
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось связаться с сервером: {e}")
                 
         def block_client(self, client_id):
             import requests

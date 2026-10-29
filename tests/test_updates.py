@@ -115,6 +115,59 @@ class TestVersionAndUpdates(unittest.TestCase):
             changelog="Восстановлено после теста"
         )
 
+    def test_client_targeted_update_flow(self):
+        # 1. Клиент подключается с PyQt5 версией 2.0.30
+        headers_qt5 = {
+            "X-Client-ID": "Clinician-PC-Qt5",
+            "X-Client-Version": "2.0.30",
+            "X-Client-Qt": "PyQt5"
+        }
+        res_stat = self.client.get("/api/server/status", headers=headers_qt5)
+        self.assertEqual(res_stat.status_code, 200)
+
+        # 2. Проверяем список клиентов в админке
+        res_clients = self.client.get("/api/server/clients")
+        self.assertEqual(res_clients.status_code, 200)
+        clients = res_clients.json()
+        target_client = next((c for c in clients if c["client_id"] == "Clinician-PC-Qt5"), None)
+        self.assertIsNotNone(target_client)
+        self.assertEqual(target_client["version"], "2.0.30")
+        self.assertEqual(target_client["qt_flavor"], "PyQt5")
+        self.assertFalse(target_client["has_pending_update"])
+
+        # 3. Инициируем обновление клиента
+        res_up = self.client.post(
+            "/api/server/clients/Clinician-PC-Qt5/update",
+            json={"force_rebuild": False, "qt_flavor": "PyQt5"}
+        )
+        self.assertEqual(res_up.status_code, 200)
+        up_data = res_up.json()
+        self.assertIn("status", up_data)
+        self.assertEqual(up_data["qt_flavor"], "PyQt5")
+
+        # 4. Проверяем, что в следующем опросе статуса клиент получает push_update
+        res_ping = self.client.get("/api/server/status", headers=headers_qt5)
+        self.assertEqual(res_ping.status_code, 200)
+        ping_data = res_ping.json()
+        self.assertIn("push_update", ping_data)
+        self.assertTrue(ping_data["push_update"]["should_update"])
+        self.assertEqual(ping_data["push_update"]["qt"], "PyQt5")
+
+        # 5. Проверяем скачивание дистрибутива с параметром qt
+        res_dl = self.client.get("/api/updates/client/download?qt=PyQt5")
+        self.assertEqual(res_dl.status_code, 200)
+
+        # 6. После того как клиент обновился и сообщает целевую версию, pending сбрасывается
+        target_ver = ping_data["push_update"]["version"]
+        headers_updated = {
+            "X-Client-ID": "Clinician-PC-Qt5",
+            "X-Client-Version": target_ver,
+            "X-Client-Qt": "PyQt5"
+        }
+        res_after = self.client.get("/api/server/status", headers=headers_updated)
+        self.assertEqual(res_after.status_code, 200)
+        self.assertNotIn("push_update", res_after.json())
+
 
 if __name__ == "__main__":
     unittest.main()

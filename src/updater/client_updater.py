@@ -77,7 +77,8 @@ class ClientUpdater:
         server_url: str, 
         progress_callback: Optional[Callable[[int, int], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
-        chunk_size: int = 65536
+        chunk_size: int = 65536,
+        qt_flavor: Optional[str] = None
     ) -> Optional[Path]:
         """
         Скачивает новую версию клиента во временный файл.
@@ -85,6 +86,8 @@ class ClientUpdater:
         """
         clean_url = server_url.rstrip("/")
         download_url = f"{clean_url}/api/updates/client/download"
+        if qt_flavor:
+            download_url += f"?qt={qt_flavor}"
         part_file = self.temp_update_dir / "ASS_Client_download.part"
 
         try:

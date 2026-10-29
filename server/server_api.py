@@ -13,7 +13,7 @@ import logging
 import tempfile
 import psutil
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
@@ -40,10 +40,32 @@ class BlacklistManager:
     def __init__(self):
         self.active_clients = {}  # client_id -> last_activity_timestamp
         self.blacklisted_ids = set()
+        self.client_metadata = {}  # client_id -> {"version": str, "qt_flavor": str}
+        self.pending_updates = {}  # client_id -> {"version": str, "qt_flavor": str, "auto_apply": bool}
         
-    def register_activity(self, client_id: str):
+    def register_activity(self, client_id: str, version: Optional[str] = None, qt_flavor: Optional[str] = None):
         if client_id and client_id not in self.blacklisted_ids:
             self.active_clients[client_id] = time.time()
+            if client_id not in self.client_metadata:
+                self.client_metadata[client_id] = {}
+            if version:
+                self.client_metadata[client_id]["version"] = str(version)
+            if qt_flavor:
+                self.client_metadata[client_id]["qt_flavor"] = str(qt_flavor)
+
+    def queue_client_update(self, client_id: str, target_version: str, qt_flavor: Optional[str] = None, auto_apply: bool = True):
+        if client_id:
+            self.pending_updates[client_id] = {
+                "version": target_version,
+                "qt_flavor": qt_flavor,
+                "auto_apply": auto_apply
+            }
+
+    def get_pending_update(self, client_id: str) -> Optional[Dict[str, Any]]:
+        return self.pending_updates.get(client_id)
+
+    def clear_pending_update(self, client_id: str):
+        self.pending_updates.pop(client_id, None)
             
     def block(self, client_id: str):
         if client_id:
@@ -60,10 +82,14 @@ class BlacklistManager:
         info = []
         # Сначала заблокированные
         for cid in sorted(self.blacklisted_ids):
+            meta = self.client_metadata.get(cid, {})
             info.append({
                 "client_id": cid,
+                "version": meta.get("version", "—"),
+                "qt_flavor": meta.get("qt_flavor", "PyQt6"),
                 "last_activity": "Заблокирован",
-                "status": "Заблокирован"
+                "status": "Заблокирован",
+                "has_pending_update": cid in self.pending_updates
             })
         
         current_time = time.time()
@@ -75,10 +101,14 @@ class BlacklistManager:
                 status = "Офлайн"
             else:
                 status = "Активен"
+            meta = self.client_metadata.get(cid, {})
             info.append({
                 "client_id": cid,
+                "version": meta.get("version", "—"),
+                "qt_flavor": meta.get("qt_flavor", "PyQt6"),
                 "last_activity": dt,
-                "status": status
+                "status": status,
+                "has_pending_update": cid in self.pending_updates
             })
         return info
 
@@ -86,12 +116,13 @@ blacklist_manager = BlacklistManager()
 
 class ClientTrackerMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # 1. Извлекаем X-Client-ID из заголовков
+        # 1. Извлекаем X-Client-ID, X-Client-Version и X-Client-Qt из заголовков
         client_id = request.headers.get("X-Client-ID")
+        client_version = request.headers.get("X-Client-Version")
+        client_qt = request.headers.get("X-Client-Qt")
         
         # 2. Если заголовок отсутствует, проверяем также параметры формы или URL (на всякий случай)
         if not client_id:
-            # Пытаемся взять из query параметров или form
             client_id = request.query_params.get("client_name") or request.query_params.get("client_id")
             
         if not client_id:
@@ -103,7 +134,11 @@ class ClientTrackerMiddleware(BaseHTTPMiddleware):
             
         # 4. Регистрируем активность
         if client_id != "Неизвестный клиент":
-            blacklist_manager.register_activity(client_id)
+            blacklist_manager.register_activity(
+                client_id,
+                version=client_version,
+                qt_flavor=client_qt
+            )
             
         response = await call_next(request)
         return response
@@ -420,7 +455,7 @@ def reorder_queue(payload: ReorderPayload):
         raise HTTPException(status_code=400, detail="Не удалось пересортировать очередь.")
 
 @app.get("/api/server/status")
-def get_server_status():
+def get_server_status(request: Request):
     """
     Возвращает общие показатели состояния сервера и список задач.
     """
@@ -428,9 +463,13 @@ def get_server_status():
         queue_manager.engine.load_presets_config_if_changed()
     except Exception as e:
         logger.error(f"Ошибка проверки изменения конфигурации бэкенда: {e}")
+
+    client_id = request.headers.get("X-Client-ID")
+    client_version = request.headers.get("X-Client-Version")
+    client_qt = request.headers.get("X-Client-Qt")
         
-    meta = update_manager.get_update_info()
-    return {
+    meta = update_manager.get_update_info(client_version=client_version, qt_flavor=client_qt)
+    status_data = {
         "version": get_version(),
         "server_version": get_version(),
         "latest_client_version": meta.get("latest_version", get_version()),
@@ -441,6 +480,22 @@ def get_server_status():
         "cluster": queue_manager.cluster_mgr.get_cluster_status() if hasattr(queue_manager, "cluster_mgr") else {},
         "licenses": getattr(queue_manager.engine, "licenses", "")
     }
+
+    if client_id and client_id != "Неизвестный клиент":
+        pending = blacklist_manager.get_pending_update(client_id)
+        if pending:
+            # Если клиент уже подключился с целевой версией, снимаем pending
+            if client_version and client_version == pending.get("version"):
+                blacklist_manager.clear_pending_update(client_id)
+            else:
+                status_data["push_update"] = {
+                    "should_update": True,
+                    "version": pending.get("version"),
+                    "qt": pending.get("qt_flavor"),
+                    "auto_apply": pending.get("auto_apply", True)
+                }
+
+    return status_data
 
 @app.post("/api/server/pause")
 def pause_server():
@@ -477,6 +532,129 @@ def unblock_client(client_id: str):
     blacklist_manager.unblock(client_id)
     logger.info(f"Клиент '{client_id}' успешно разблокирован.")
     return {"status": "success", "message": f"Клиент '{client_id}' разблокирован."}
+
+class ClientUpdateTriggerPayload(BaseModel):
+    force_rebuild: bool = False
+    qt_flavor: Optional[str] = None
+
+import subprocess
+import threading
+import sys
+
+_builder_lock = threading.Lock()
+_active_builds: Dict[str, threading.Thread] = {}
+_pending_build_subscribers: Dict[str, List[str]] = {}
+
+def _run_build_client_job(qt_flavor: str):
+    tag = "PyQt5" if "5" in str(qt_flavor).lower() else "PyQt6"
+    script_name = "build_clientPyQT5.py" if tag == "PyQt5" else "build_clientPyQT6.py"
+    base_dir = Path(__file__).resolve().parent.parent
+    venv_py = base_dir / "venv" / "Scripts" / "python.exe"
+    py_exe = str(venv_py) if venv_py.exists() else sys.executable
+    script_path = base_dir / script_name
+
+    logger.info(f"[ClientBuilder] Запуск процесса сборки {tag} ({script_name})...")
+    try:
+        proc = subprocess.run(
+            [py_exe, str(script_path)],
+            cwd=str(base_dir),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace"
+        )
+        if proc.returncode != 0:
+            logger.error(f"[ClientBuilder] Сборка {tag} завершилась с ошибкой:\n{proc.stderr[-1000:]}")
+            return
+            
+        dist_exe = base_dir / "dist" / "ASS_Client.exe"
+        if not dist_exe.exists():
+            logger.error(f"[ClientBuilder] Собранный файл dist/ASS_Client.exe не найден!")
+            return
+
+        cur_ver = get_version()
+        meta = update_manager.register_client_binary(
+            source_path=dist_exe,
+            version_str=cur_ver,
+            is_critical=False,
+            changelog=f"Автоматическая фоновая сборка {tag} для удаленного обновления.",
+            qt_flavor=tag
+        )
+        logger.info(f"[ClientBuilder] Клиент {tag} успешно собран и зарегистрирован: v{meta['version']}")
+
+        with _builder_lock:
+            subscribers = _pending_build_subscribers.pop(tag, [])
+            for cid in subscribers:
+                blacklist_manager.queue_client_update(cid, meta["version"], qt_flavor=tag)
+                logger.info(f"[ClientBuilder] Клиенту '{cid}' отправлена команда на тихое автообновление ({tag} v{meta['version']}).")
+    except Exception as e:
+        logger.error(f"[ClientBuilder] Исключение во время сборки {tag}: {e}")
+    finally:
+        with _builder_lock:
+            _active_builds.pop(tag, None)
+
+@app.post("/api/server/clients/{client_id}/update")
+def trigger_client_remote_update(client_id: str, payload: Optional[ClientUpdateTriggerPayload] = None):
+    """
+    Инициирует удаленное обновление клиентского приложения:
+    - Определяет Qt ветку (PyQt5 / PyQt6) клиента.
+    - При необходимости запускает компиляцию клиента через PyInstaller.
+    - Ставит клиенту флаг пуш-обновления, заставляя его тихо скачать exe и перезапуститься.
+    """
+    if payload is None:
+        payload = ClientUpdateTriggerPayload()
+        
+    meta_client = blacklist_manager.client_metadata.get(client_id, {})
+    qt_flv = payload.qt_flavor or meta_client.get("qt_flavor", "PyQt6")
+    tag = "PyQt5" if "5" in str(qt_flv).lower() else "PyQt6"
+    
+    bin_path = update_manager.get_client_binary_path(qt_flavor=tag)
+    needs_build = payload.force_rebuild or (bin_path is None or not bin_path.exists())
+
+    with _builder_lock:
+        if tag in _active_builds:
+            if tag not in _pending_build_subscribers:
+                _pending_build_subscribers[tag] = []
+            if client_id not in _pending_build_subscribers[tag]:
+                _pending_build_subscribers[tag].append(client_id)
+            return {
+                "status": "building",
+                "message": f"Сборка клиента ({tag}) уже выполняется. Клиент '{client_id}' получит обновление сразу по завершении.",
+                "qt_flavor": tag
+            }
+
+        if needs_build:
+            if tag not in _pending_build_subscribers:
+                _pending_build_subscribers[tag] = []
+            if client_id not in _pending_build_subscribers[tag]:
+                _pending_build_subscribers[tag].append(client_id)
+
+            t = threading.Thread(target=_run_build_client_job, args=(tag,), daemon=True, name=f"BuildClient-{tag}")
+            _active_builds[tag] = t
+            t.start()
+            return {
+                "status": "building",
+                "message": f"Запущена компиляция нового исполняемого файла ({tag}) на сервере. Клиент '{client_id}' обновится автоматически.",
+                "qt_flavor": tag
+            }
+        else:
+            up_info = update_manager.get_update_info(qt_flavor=tag)
+            latest_v = up_info.get("latest_version", get_version())
+            blacklist_manager.queue_client_update(client_id, latest_v, qt_flavor=tag)
+            return {
+                "status": "queued",
+                "message": f"Готовая сборка v{latest_v} ({tag}) найдена на сервере. Клиент '{client_id}' получил команду на автоматическое обновление.",
+                "version": latest_v,
+                "qt_flavor": tag
+            }
+
+@app.get("/api/server/clients/build_status")
+def get_client_build_status():
+    with _builder_lock:
+        return {
+            "active_builds": list(_active_builds.keys()),
+            "pending_subscribers": {k: list(v) for k, v in _pending_build_subscribers.items()}
+        }
 
 
 # ================================================================================
@@ -607,23 +785,23 @@ def save_server_license(payload: LicensePayload):
 # ================================================================================
 
 @app.get("/api/updates/client/info")
-def get_client_update_info(client_version: Optional[str] = None):
+def get_client_update_info(client_version: Optional[str] = None, qt: Optional[str] = None):
     """
-    Возвращает информацию об актуальной версии клиента и наличии обновлений.
+    Возвращает информацию об актуальной версии клиента и наличии обновлений с учетом ветки Qt (PyQt5 / PyQt6).
     """
-    return update_manager.get_update_info(client_version=client_version)
+    return update_manager.get_update_info(client_version=client_version, qt_flavor=qt)
 
 
 @app.get("/api/updates/client/download")
-def download_client_binary():
+def download_client_binary(qt: Optional[str] = None):
     """
-    Скачивание актуального исполняемого файла клиента ASS_Client.exe.
+    Скачивание актуального исполняемого файла клиента ASS_Client.exe (или ASS_Client_PyQt5.exe / ASS_Client_PyQt6.exe).
     """
-    binary_path = update_manager.get_client_binary_path()
+    binary_path = update_manager.get_client_binary_path(qt_flavor=qt)
     if not binary_path or not binary_path.exists():
         raise HTTPException(
             status_code=404, 
-            detail="Дистрибутив клиента ASS_Client.exe не найден в репозитории сервера."
+            detail="Дистрибутив клиента не найден в репозитории сервера."
         )
     return FileResponse(
         path=str(binary_path),

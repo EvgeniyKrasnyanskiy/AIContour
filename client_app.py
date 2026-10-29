@@ -255,10 +255,11 @@ try:
         progress_signal = pyqtSignal(int, int)   # downloaded_bytes, total_bytes
         finished_signal = pyqtSignal(bool, str)  # success, message_or_path
 
-        def __init__(self, updater: ClientUpdater, server_url: str):
+        def __init__(self, updater: ClientUpdater, server_url: str, qt_flavor: Optional[str] = None):
             super().__init__()
             self.updater = updater
             self.server_url = server_url
+            self.qt_flavor = qt_flavor
             self.is_cancelled = False
 
         def cancel(self):
@@ -269,7 +270,8 @@ try:
                 res_path = self.updater.download_update(
                     server_url=self.server_url,
                     progress_callback=lambda d, t: self.progress_signal.emit(d, t),
-                    cancel_check=lambda: self.is_cancelled
+                    cancel_check=lambda: self.is_cancelled,
+                    qt_flavor=self.qt_flavor
                 )
                 if res_path and res_path.exists():
                     self.finished_signal.emit(True, str(res_path))
@@ -3031,11 +3033,19 @@ if PYQT_AVAILABLE:
                     "Обновленный файл сохранен во временной папке."
                 )
 
-        def start_background_update_download(self, latest_v: str):
+        def start_background_update_download(self, latest_v: str, qt_flavor: Optional[str] = None, auto_apply: bool = False):
             """Запуск тихого фонового скачивания обновления с сервера в период простоя станции."""
             if getattr(self, "is_bg_downloading", False):
                 return
             if getattr(self, "staged_update_version", None) == latest_v and self.updater.staged_file.exists():
+                if auto_apply:
+                    logger.info(f"Обновление v{latest_v} уже скачано. Немедленный перезапуск по требованию сервера...")
+                    self.save_settings()
+                    success = self.updater.apply_update_and_restart()
+                    if success:
+                        from PyQt6.QtWidgets import QApplication
+                        QApplication.quit()
+                    return
                 self.btn_corner_update.setText(f"🔄 Перезапустить (v{latest_v})")
                 self.btn_corner_update.setVisible(True)
                 return
@@ -3044,19 +3054,30 @@ if PYQT_AVAILABLE:
             if not server_url:
                 return
 
+            if not qt_flavor:
+                qt_flavor = "PyQt5" if USE_PYQT5 else "PyQt6"
+
             self.is_bg_downloading = True
             self.available_update_version = latest_v
-            logger.info(f"Станция свободна: запуск фонового скачивания обновления v{latest_v} с сервера...")
+            logger.info(f"Станция свободна: запуск фонового скачивания обновления v{latest_v} ({qt_flavor}) с сервера (auto_apply={auto_apply})...")
             
             def bg_done(success: bool, msg: str):
                 self.is_bg_downloading = False
                 if success:
                     self.staged_update_version = latest_v
+                    if auto_apply:
+                        logger.info(f"Фоновое скачивание обновления v{latest_v} завершено. Немедленный перезапуск по требованию сервера...")
+                        self.save_settings()
+                        success_restart = self.updater.apply_update_and_restart()
+                        if success_restart:
+                            from PyQt6.QtWidgets import QApplication
+                            QApplication.quit()
+                        return
                     self.btn_corner_update.setText(f"🔄 Перезапустить (v{latest_v})")
                     self.btn_corner_update.setVisible(True)
                     logger.info(f"Фоновое скачивание обновления v{latest_v} завершено успешно.")
 
-            self.bg_worker = DownloadUpdateWorker(self.updater, server_url)
+            self.bg_worker = DownloadUpdateWorker(self.updater, server_url, qt_flavor=qt_flavor)
             self.bg_worker.finished_signal.connect(bg_done)
             self.bg_worker.start()
 
@@ -6141,7 +6162,15 @@ if PYQT_AVAILABLE:
                 
             server_url = self.get_server_url()
             client_id = self.client_name_edit.text().strip()
-            self.status_worker = NetworkStatusWorker(server_url, timeout=3.0, client_id=client_id)
+            client_ver = self.get_client_version()
+            client_qt = "PyQt5" if USE_PYQT5 else "PyQt6"
+            self.status_worker = NetworkStatusWorker(
+                server_url, 
+                timeout=3.0, 
+                client_id=client_id,
+                client_version=client_ver,
+                qt_flavor=client_qt
+            )
             self.status_worker.status_received.connect(self.on_status_received)
             self.status_worker.error_occurred.connect(self.on_status_error)
             self.status_worker.start()
@@ -6177,15 +6206,23 @@ if PYQT_AVAILABLE:
                     self.lbl_server_status_indicator.setText("Сервер: ✅")
                     self.lbl_server_status_indicator.setStyleSheet("font-weight: bold; color: #2ecc71; margin-right: 5px; margin-bottom: 2px; font-size: 12px;")
 
-                # Проверка наличия обновлений клиента с сервера
+                # Проверка пуш-обновления от сервера или стандартного обновления
                 latest_client_ver = data.get("latest_client_version", "")
                 has_client_update = data.get("has_client_update", False)
-                if has_client_update and latest_client_ver:
+                push_update = data.get("push_update")
+
+                if push_update and push_update.get("should_update"):
+                    target_v = push_update.get("version") or latest_client_ver
+                    qt_flv = push_update.get("qt")
+                    auto_apply = push_update.get("auto_apply", True)
+                    if not getattr(self, "is_bg_downloading", False) and not getattr(self, "_current_active_job_id", None):
+                        self.start_background_update_download(target_v, qt_flavor=qt_flv, auto_apply=auto_apply)
+                elif has_client_update and latest_client_ver:
                     if getattr(self, "staged_update_version", None) == latest_client_ver and self.updater.staged_file.exists():
                         self.btn_corner_update.setText(f"🔄 Перезапустить (v{latest_client_ver})")
                         self.btn_corner_update.setVisible(True)
                     elif not getattr(self, "is_bg_downloading", False) and not getattr(self, "_current_active_job_id", None):
-                        self.start_background_update_download(latest_client_ver)
+                        self.start_background_update_download(latest_client_ver, qt_flavor="PyQt5" if USE_PYQT5 else "PyQt6", auto_apply=False)
                 
                 # Обновление таблицы очереди (все задачи очереди сервера)
                 my_client_name = self.client_name_edit.text().strip()
