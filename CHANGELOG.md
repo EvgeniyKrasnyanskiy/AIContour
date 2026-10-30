@@ -5,6 +5,12 @@
 
 ## [Unreleased]
 
+## [2.0.42] - 2026-10-30
+- **Исправление сопоставления ROI (Fuzzy Matching) и устранение ложного импорта OAR:**
+  - В словарь псевдонимов [config.py](file:///d:/ASS/config.py) (`EXTERNAL_ALIASES`) добавлены алиасы для внешнего контура тела (`bodyskin`, `skinbody`, `bodyexternal`), верхней полой вены (`venacavasup`, `venacavasuperior`, `svc`) и нижней полой вены (`inferiorvenacava`, `venacavainf`, `venacavainferior`, `ivc`).
+  - В [client_app.py](file:///d:/ASS/client_app.py) и [server_app.py](file:///d:/ASS/server_app.py) нормализованный словарь распознавания OAR (`supported_norm_map`) дополнен именами из [config/structure_names.json](file:///d:/ASS/config/structure_names.json) (`get_rtstruct_name`), благодаря чему сгенерированные RTSTRUCT структуры (включая `Body / Skin` и `Vena Cava Sup`) корректно распределяются по стандартным анатомическим группам («Внешний контур тела», «Грудная клетка») и больше не попадают ошибочно в блок «ИМПОРТИРОВАННЫЕ OAR».
+  - Добавлены модульные тесты `test_rtstruct_fuzzy_mapping` в [tests/test_structure_names.py](file:///d:/ASS/tests/test_structure_names.py).
+
 ## [2.0.41] - 2026-10-29
 - **Кнопка быстрого перезапуска сервера с защитой от случайного нажатия:**
   - В панели управления сервером ([server_app.py](file:///d:/ASS/server_app.py)) рядом со статусом «СЕРВЕР АКТИВЕН» добавлена кнопка **«🔄 Перезапуск»**.

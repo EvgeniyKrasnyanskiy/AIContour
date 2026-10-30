@@ -85,6 +85,34 @@ class TestStructureNames(unittest.TestCase):
         res2 = client.get("/api/config")
         self.assertEqual(res2.json()["structure_names"].get("spleen"), "Spleen_Custom_ROI")
 
+    def test_rtstruct_fuzzy_mapping(self):
+        """Проверяет маппинг Body/Skin, Vena Cava Sup (SVC) и Vena Cava Inf (IVC)."""
+        import re
+        from config import EXTERNAL_ALIASES
+        normalize_name = lambda n: re.sub(r'[^a-z0-9]', '', n.lower())
+
+        # Проверка алиасов в EXTERNAL_ALIASES
+        self.assertEqual(EXTERNAL_ALIASES.get("bodyskin"), "body")
+        self.assertEqual(EXTERNAL_ALIASES.get("venacavasup"), "superior_vena_cava")
+        self.assertEqual(EXTERNAL_ALIASES.get("svc"), "superior_vena_cava")
+        self.assertEqual(EXTERNAL_ALIASES.get("venacavainf"), "inferior_vena_cava")
+        self.assertEqual(EXTERNAL_ALIASES.get("ivc"), "inferior_vena_cava")
+
+        # Проверка распознавания имен
+        for roi_name, expected_id in [
+            ("Body / Skin", "body"),
+            ("Vena Cava Sup", "superior_vena_cava"),
+            ("SVC", "superior_vena_cava"),
+            ("Vena Cava Inf", "inferior_vena_cava"),
+            ("IVC", "inferior_vena_cava"),
+            ("Spinal Cord", "spinal_cord"),
+            ("Heart", "heart"),
+        ]:
+            norm = normalize_name(roi_name)
+            mapped = EXTERNAL_ALIASES.get(norm)
+            self.assertEqual(mapped, expected_id, f"Failed to map '{roi_name}' to '{expected_id}'")
+
 
 if __name__ == "__main__":
     unittest.main()
+

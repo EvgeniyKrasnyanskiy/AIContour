@@ -3921,6 +3921,11 @@ if PYQT_AVAILABLE:
                         if rt_name:
                             supported_norm_map[normalize_name(rt_name)] = org
 
+                    if hasattr(self.engine, 'structure_names') and isinstance(self.engine.structure_names, dict):
+                        for org, custom_name in self.engine.structure_names.items():
+                            if custom_name and isinstance(custom_name, str):
+                                supported_norm_map[normalize_name(custom_name)] = org
+
                     def get_mapped_organ(roi_name_str: str) -> str:
                         norm = normalize_name(roi_name_str)
                         if norm in EXTERNAL_ALIASES:
@@ -5967,6 +5972,9 @@ version = {sys.version.split()[0]}
                     mon_pretty = self.engine.get_monaco_pretty_name(org)
                     if mon_pretty:
                         supported_norm_map[normalize_name(mon_pretty)] = org
+                    rt_name = getattr(self.engine, 'get_rtstruct_name', lambda o: o)(org)
+                    if rt_name:
+                        supported_norm_map[normalize_name(rt_name)] = org
                 
                 # Дополняем виртуальными органами из ORGAN_GROUPS (lungs и т.д.),
                 # которых нет в TotalSegmentator class_map
@@ -5977,6 +5985,15 @@ version = {sys.version.split()[0]}
                             mon_pretty = self.engine.get_monaco_pretty_name(org)
                             if mon_pretty:
                                 supported_norm_map[normalize_name(mon_pretty)] = org
+                            rt_name = getattr(self.engine, 'get_rtstruct_name', lambda o: o)(org)
+                            if rt_name:
+                                supported_norm_map[normalize_name(rt_name)] = org
+
+                # Дополняем всеми пользовательскими именами из structure_names движка
+                if hasattr(self.engine, 'structure_names') and isinstance(self.engine.structure_names, dict):
+                    for org, custom_name in self.engine.structure_names.items():
+                        if custom_name and isinstance(custom_name, str):
+                            supported_norm_map[normalize_name(custom_name)] = org
 
                 def get_mapped_organ(roi_name_str: str) -> str:
                     norm = normalize_name(roi_name_str)

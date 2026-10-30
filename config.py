@@ -119,6 +119,9 @@ EXTERNAL_ALIASES = {
     "body": "body",
     "external": "body",
     "skin": "body",
+    "bodyskin": "body",
+    "skinbody": "body",
+    "bodyexternal": "body",
     
     # Глаза, хрусталики и орбиты
     "eyeleft": "eye_left",
@@ -207,6 +210,9 @@ EXTERNAL_ALIASES = {
     "aorta": "aorta",
     "pulmonaryartery": "pulmonary_artery",
     "superiorvenacava": "superior_vena_cava",
+    "venacavasup": "superior_vena_cava",
+    "venacavasuperior": "superior_vena_cava",
+    "svc": "superior_vena_cava",
     "sternum": "sternum",
     "claviculaleft": "clavicula_left",
     "claviculal": "clavicula_left",
@@ -244,6 +250,10 @@ EXTERNAL_ALIASES = {
     "bowel": "small_bowel",
     "bowelbag": "small_bowel",
     "colon": "colon",
+    "inferiorvenacava": "inferior_vena_cava",
+    "venacavainf": "inferior_vena_cava",
+    "venacavainferior": "inferior_vena_cava",
+    "ivc": "inferior_vena_cava",
     
     # Малый таз
     "urinarybladder": "urinary_bladder",
