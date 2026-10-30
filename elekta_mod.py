@@ -273,13 +273,24 @@ class ElektaManager:
             self.receiver.stop()
             self.receiver = None
 
-    def send_back_to_monaco(self, study_dir: str, progress_callback: Optional[Callable[[int, int, str], None]] = None,
-                            finished_callback: Optional[Callable[[bool, str], None]] = None) -> bool:
+    def send_back_to_monaco(
+        self, 
+        study_dir: str, 
+        destination_ip: Optional[str] = None,
+        destination_port: Optional[int] = None,
+        destination_aet: Optional[str] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        finished_callback: Optional[Callable[[bool, str], None]] = None
+    ) -> bool:
         """Запускает фоновую отправку всех файлов исследования и RTSTRUCT обратно на Monaco."""
-        if not self.last_monaco_ip:
-            self._log("Ошибка: нет сохраненного IP-адреса Monaco для отправки.")
+        target_ip = (destination_ip or self.last_monaco_ip or "").strip()
+        target_port = destination_port or self.monaco_port or 104
+        target_aet = (destination_aet or self.monaco_aet or "MONACO").strip()
+
+        if not target_ip:
+            self._log("Ошибка: не указан IP-адрес станции Monaco для отправки.")
             if finished_callback:
-                finished_callback(False, "Отсутствует сохраненный IP-адрес Monaco (исследование не принималось по сети).")
+                finished_callback(False, "Не указан IP-адрес станции Monaco для отправки. Проверьте настройки.")
             return False
 
         if not os.path.isdir(study_dir):
@@ -300,11 +311,11 @@ class ElektaManager:
                 finished_callback(False, "В папке исследования не обнаружено DICOM файлов.")
             return False
 
-        self._log(f"Запуск экспорта обратно на Monaco ({self.last_monaco_ip}:{self.monaco_port}, AET: {self.monaco_aet})...")
+        self._log(f"Запуск экспорта обратно на Monaco ({target_ip}:{target_port}, AET: {target_aet})...")
         self.sender_thread = DicomSenderThread(
-            ip=self.last_monaco_ip,
-            port=self.monaco_port,
-            ae_title=self.monaco_aet,
+            ip=target_ip,
+            port=target_port,
+            ae_title=target_aet,
             files_to_send=files_to_send
         )
 

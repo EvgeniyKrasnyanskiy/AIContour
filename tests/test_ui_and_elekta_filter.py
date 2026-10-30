@@ -129,6 +129,29 @@ class TestUIAndElektaFilter(unittest.TestCase):
         self.assertIn("Wasserthal", content)
         self.assertIn("Radiology: Artificial Intelligence", content)
 
+    def test_elekta_send_back_destination_ip(self):
+        """Проверяет возможность отправки исследования на Monaco с явным destination_ip."""
+        import tempfile
+        import shutil
+        from elekta_mod import ElektaManager
+        
+        mgr = ElektaManager()
+        # Без IP отправка должна завершиться отказом
+        res_no_ip = mgr.send_back_to_monaco(study_dir="non_existent", destination_ip=None)
+        self.assertFalse(res_no_ip)
+
+        # С явным IP на несуществующую папку — отказ по причине отсутствия папки
+        res_no_dir = mgr.send_back_to_monaco(study_dir="non_existent_dir_12345", destination_ip="192.168.1.50")
+        self.assertFalse(res_no_dir)
+
+        # С пустой папкой (без DICOM) — отказ
+        temp_dir = tempfile.mkdtemp()
+        try:
+            res_empty = mgr.send_back_to_monaco(study_dir=temp_dir, destination_ip="192.168.1.50")
+            self.assertFalse(res_empty)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
 if __name__ == '__main__':
     unittest.main()
 

@@ -2208,6 +2208,7 @@ if PYQT_AVAILABLE:
             self.elekta_local_port_edit.textChanged.connect(self.validate_elekta_local_port)
             self.elekta_monaco_aet_edit.textChanged.connect(self.save_settings)
             self.elekta_monaco_port_edit.textChanged.connect(self.save_settings)
+            self.elekta_monaco_ip_edit.textChanged.connect(self.save_settings)
             
             tab2_layout.addWidget(input_group)
             
@@ -3498,6 +3499,7 @@ if PYQT_AVAILABLE:
                 self.elekta_local_port_edit.blockSignals(True)
                 self.elekta_monaco_aet_edit.blockSignals(True)
                 self.elekta_monaco_port_edit.blockSignals(True)
+                self.elekta_monaco_ip_edit.blockSignals(True)
                 self.elekta_mode_check.blockSignals(True)
                 
                 elekta_mode_enabled = False
@@ -3514,6 +3516,9 @@ if PYQT_AVAILABLE:
                     elekta_monaco_port = str(self.settings.value("elekta_monaco_port", "104"))
                     self.elekta_monaco_port_edit.setText(elekta_monaco_port)
                     
+                    elekta_monaco_ip = str(self.settings.value("elekta_monaco_ip", "127.0.0.1"))
+                    self.elekta_monaco_ip_edit.setText(elekta_monaco_ip)
+                    
                     val = self.settings.value("elekta_mode_enabled", False)
                     if isinstance(val, str):
                         elekta_mode_enabled = val.lower() in ("true", "1")
@@ -3528,6 +3533,7 @@ if PYQT_AVAILABLE:
                     self.elekta_local_port_edit.blockSignals(False)
                     self.elekta_monaco_aet_edit.blockSignals(False)
                     self.elekta_monaco_port_edit.blockSignals(False)
+                    self.elekta_monaco_ip_edit.blockSignals(False)
                     self.elekta_mode_check.blockSignals(False)
 
                 # Валидируем свободность локального порта
@@ -3608,6 +3614,8 @@ if PYQT_AVAILABLE:
                 self.settings.setValue("elekta_monaco_aet", self.elekta_monaco_aet_edit.text().strip())
             if hasattr(self, 'elekta_monaco_port_edit'):
                 self.settings.setValue("elekta_monaco_port", self.elekta_monaco_port_edit.text().strip())
+            if hasattr(self, 'elekta_monaco_ip_edit'):
+                self.settings.setValue("elekta_monaco_ip", self.elekta_monaco_ip_edit.text().strip())
             
             checked_organs = []
             for i in range(self.organs_list.count()):
@@ -3686,12 +3694,15 @@ if PYQT_AVAILABLE:
                     else:
                         self.preset_combo.setCurrentIndex(0)
                         
+                    self._config_synced_from_server = True
                     logging.info("Конфигурация успешно синхронизирована с сервером. ✅")
                     return True
                 else:
+                    self._config_synced_from_server = False
                     logging.warning(f"Сервер вернул код {r.status_code} при синхронизации конфигурации.")
                     return False
             except Exception as e:
+                self._config_synced_from_server = False
                 logging.warning(f"Не удалось синхронизировать конфигурацию с сервером: {e}")
                 return False
 
@@ -4153,11 +4164,16 @@ if PYQT_AVAILABLE:
             
             menu = QMenu(self.series_table)
             open_folder_action = menu.addAction("📂 Открыть папку в Проводнике")
+            send_monaco_action = None
+            if getattr(self, 'elekta_mode_check', None) and self.elekta_mode_check.isChecked():
+                send_monaco_action = menu.addAction("📤 Отправить на станцию Monaco (Elekta)")
             delete_action = menu.addAction("Удалить пациента")
             delete_structs_action = menu.addAction("Удалить файл структур")
             
             action = menu.exec(self.series_table.viewport().mapToGlobal(position))
-            if action == open_folder_action:
+            if action == send_monaco_action:
+                self.export_study_to_monaco(path, patient_name)
+            elif action == open_folder_action:
                 if path and os.path.exists(path):
                     try:
                         import threading
@@ -4255,6 +4271,57 @@ if PYQT_AVAILABLE:
                     QMessageBox.critical(self, "Ошибка удаления", f"Не удалось удалить файлы структур:\n{e}")
                     logger.error(f"Ошибка удаления структур: {e}")
                 self.scan_timer.start(15000)
+
+        def export_study_to_monaco(self, study_dir: str, patient_name: str):
+            """Ручная отправка выбранного исследования со структурами на станцию Monaco."""
+            if not study_dir or not os.path.isdir(study_dir):
+                QMessageBox.warning(self, "Ошибка экспорта", f"Папка исследования не найдена:\n{study_dir}")
+                return
+
+            if not hasattr(self, 'elekta_manager') or not self.elekta_manager:
+                from elekta_mod import ElektaManager
+                self.elekta_manager = ElektaManager(output_dir="DICOM", log_callback=None)
+
+            monaco_ip = self.elekta_monaco_ip_edit.text().strip()
+            if not monaco_ip or monaco_ip in ("127.0.0.1", "localhost"):
+                from PyQt6.QtWidgets import QInputDialog
+                new_ip, ok = QInputDialog.getText(
+                    self, 
+                    "IP-адрес Monaco", 
+                    f"Укажите IP-адрес станции Monaco для отправки исследования {patient_name}:",
+                    text=monaco_ip or "192.168.1."
+                )
+                if not ok or not new_ip.strip():
+                    return
+                monaco_ip = new_ip.strip()
+                self.elekta_monaco_ip_edit.setText(monaco_ip)
+                self.save_settings()
+
+            monaco_aet = self.elekta_monaco_aet_edit.text().strip() or "MONACO"
+            monaco_port_str = self.elekta_monaco_port_edit.text().strip()
+            monaco_port = int(monaco_port_str) if monaco_port_str.isdigit() else 104
+
+            self.elekta_manager.monaco_aet = monaco_aet
+            self.elekta_manager.monaco_port = monaco_port
+            self.elekta_manager.last_monaco_ip = monaco_ip
+
+            self.append_log(f"[Elekta]: Запуск ручного экспорта файлов для {patient_name} на Monaco ({monaco_ip}:{monaco_port}, AET: {monaco_aet})...", "#00ffd0")
+
+            def on_manual_export_finished(send_success, send_msg):
+                if send_success:
+                    self.append_log(f"[Elekta]: {send_msg}", "#2ecc71")
+                    QMessageBox.information(self, "Экспорт на Monaco", f"Пациент {patient_name}:\n{send_msg}")
+                else:
+                    self.append_log(f"[Elekta ERROR]: {send_msg}", "#ff6b6b")
+                    QMessageBox.warning(self, "Ошибка экспорта на Monaco", f"Не удалось отправить исследование {patient_name}:\n{send_msg}")
+
+            self.elekta_manager.send_back_to_monaco(
+                study_dir=study_dir,
+                destination_ip=monaco_ip,
+                destination_port=monaco_port,
+                destination_aet=monaco_aet,
+                finished_callback=on_manual_export_finished
+            )
 
         def update_viewer_with_dicom(self, folder_path: str):
             if not folder_path or not os.path.isdir(folder_path):
@@ -5970,6 +6037,15 @@ if PYQT_AVAILABLE:
             """Вызывается, когда исследование успешно принято по DICOM."""
             self.append_log(f"Серия КТ успешно принята от Monaco и сохранена в: {study_dir} ✅", "#00ffd0")
             
+            # Автоматически обновляем IP Monaco в интерфейсе, если стоял дефолтный 127.0.0.1 или пусто
+            if hasattr(self, 'elekta_manager') and self.elekta_manager.last_monaco_ip:
+                current_ip = self.elekta_monaco_ip_edit.text().strip()
+                if not current_ip or current_ip in ("127.0.0.1", "localhost"):
+                    detected_ip = self.elekta_manager.last_monaco_ip
+                    self.elekta_monaco_ip_edit.setText(detected_ip)
+                    self.save_settings()
+                    self.append_log(f"[Elekta]: IP-адрес Monaco автоматически обновлен: {detected_ip}", "#3498db")
+            
             # Запускаем сканирование
             self.start_dicom_scan("DICOM", is_manual=False)
             
@@ -6283,11 +6359,18 @@ if PYQT_AVAILABLE:
                     self.init_presets_and_organs()
                     self.update_license_status_label()
 
+                was_server_online = getattr(self, "is_server_online", False)
+                config_synced = getattr(self, "_config_synced_from_server", False)
                 is_paused = data.get("is_paused", False)
                 self.is_server_online = True
                 self.is_client_blocked = False
                 self.is_server_paused = is_paused
                 self.update_run_button(bool(self.series_table.selectedItems()))
+
+                # Автоматическая синхронизация пресетов при восстановлении связи с сервером
+                if not was_server_online or not config_synced:
+                    logger.info("Сервер стал доступен в сети. Выполняется автоматическая синхронизация пресетов...")
+                    self.sync_config_from_server()
                 
                 info_list = data.get("jobs", [])
                 
@@ -6692,16 +6775,26 @@ if PYQT_AVAILABLE:
 
                     # Автоматическая фоновая отправка результатов на Monaco в режиме Elekta mod
                     if getattr(self, 'elekta_mode_check', None) and self.elekta_mode_check.isChecked():
-                        if hasattr(self, 'elekta_manager') and self.elekta_manager.last_monaco_ip:
-                            # Обновляем порт и AET Monaco из полей ввода перед отправкой
+                        monaco_ip = self.elekta_monaco_ip_edit.text().strip()
+                        if not monaco_ip and hasattr(self, 'elekta_manager') and self.elekta_manager.last_monaco_ip:
+                            monaco_ip = self.elekta_manager.last_monaco_ip
+                            self.elekta_monaco_ip_edit.setText(monaco_ip)
+                            self.save_settings()
+
+                        if monaco_ip:
                             monaco_aet = self.elekta_monaco_aet_edit.text().strip() or "MONACO"
                             monaco_port_str = self.elekta_monaco_port_edit.text().strip()
                             monaco_port = int(monaco_port_str) if monaco_port_str.isdigit() else 104
                             
+                            if not hasattr(self, 'elekta_manager') or not self.elekta_manager:
+                                from elekta_mod import ElektaManager
+                                self.elekta_manager = ElektaManager(output_dir="DICOM", log_callback=None)
+
                             self.elekta_manager.monaco_aet = monaco_aet
                             self.elekta_manager.monaco_port = monaco_port
+                            self.elekta_manager.last_monaco_ip = monaco_ip
                             
-                            self.append_log(f"[Elekta]: Запуск фонового экспорта снимков и RTSTRUCT для {patient_name} на Monaco ({self.elekta_manager.last_monaco_ip}:{monaco_port}, AET: {monaco_aet})...", "#00ffd0")
+                            self.append_log(f"[Elekta]: Запуск фонового экспорта снимков и RTSTRUCT для {patient_name} на Monaco ({monaco_ip}:{monaco_port}, AET: {monaco_aet})...", "#00ffd0")
                             
                             def on_elekta_export_finished(send_success, send_msg):
                                 if send_success:
@@ -6711,10 +6804,13 @@ if PYQT_AVAILABLE:
                                     
                             self.elekta_manager.send_back_to_monaco(
                                 study_dir=dicom_dir,
+                                destination_ip=monaco_ip,
+                                destination_port=monaco_port,
+                                destination_aet=monaco_aet,
                                 finished_callback=on_elekta_export_finished
                             )
                         else:
-                            self.append_log("[Elekta WARNING]: Невозможно запустить экспорт. Сохраненный IP Monaco отсутствует.", "#ff6b6b")
+                            self.append_log("[Elekta WARNING]: Невозможно запустить экспорт. Укажите IP-адрес Monaco в настройках Elekta mod.", "#ff6b6b")
                     
                 else:
                     if "отменена пользователем" in message.lower() or "отменен пользователем" in message.lower():
