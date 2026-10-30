@@ -6,6 +6,12 @@
 ## [Unreleased]
 
 ## [2.0.42] - 2026-10-30
+- **Стабилизация расчёта оставшегося времени (ETA) и монотонный прогресс многозадачной сегментации:**
+  - В [contour_engine.py](file:///d:/ASS/contour_engine.py) реализовано пропорциональное разбиение диапазона прогресса инференса ИИ (10%–88%) между задачами TotalSegmentator для пресетов, требующих нескольких моделей (например, `total` и `heartchambers_highres` для пресета `thorax`). Введён барьер монотонности `max_reported_progress`, исключающий скачки прогресса назад при переходе ко второй модели или скачивании весов.
+  - В [server/queue_manager.py](file:///d:/ASS/server/queue_manager.py) добавлен метод `update_progress_and_eta` с экспоненциальным сглаживанием (EMA, $\alpha = 0.15$), фильтрацией нестабильных ранних значений (прогресс $< 8\%$) и ограничением резких скачков вверх (не более $\times 1.25$).
+  - Реализован метод `get_effective_elapsed_and_eta`, обеспечивающий живой отсчёт прошедшего времени и плавное посекундное убывание ETA между поступлениями stdout из подпроцесса.
+  - В [server/server_api.py](file:///d:/ASS/server/server_api.py) эндпоинт статуса задачи переведён на `get_effective_elapsed_and_eta()`.
+  - Добавлены модульные тесты в [tests/test_eta_and_progress.py](file:///d:/ASS/tests/test_eta_and_progress.py).
 - **Исправление сопоставления ROI (Fuzzy Matching) и устранение ложного импорта OAR:**
   - В словарь псевдонимов [config.py](file:///d:/ASS/config.py) (`EXTERNAL_ALIASES`) добавлены алиасы для внешнего контура тела (`bodyskin`, `skinbody`, `bodyexternal`), верхней полой вены (`venacavasup`, `venacavasuperior`, `svc`) и нижней полой вены (`inferiorvenacava`, `venacavainf`, `venacavainferior`, `ivc`).
   - В [client_app.py](file:///d:/ASS/client_app.py) и [server_app.py](file:///d:/ASS/server_app.py) нормализованный словарь распознавания OAR (`supported_norm_map`) дополнен именами из [config/structure_names.json](file:///d:/ASS/config/structure_names.json) (`get_rtstruct_name`), благодаря чему сгенерированные RTSTRUCT структуры (включая `Body / Skin` и `Vena Cava Sup`) корректно распределяются по стандартным анатомическим группам («Внешний контур тела», «Грудная клетка») и больше не попадают ошибочно в блок «ИМПОРТИРОВАННЫЕ OAR».

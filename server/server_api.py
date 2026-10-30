@@ -376,6 +376,7 @@ def get_job_status(job_id: str):
     if job.status == "PENDING" and job.job_id in queue_manager.pending_queue:
         pos = queue_manager.pending_queue.index(job.job_id) + 1
         
+    elapsed, eta = job.get_effective_elapsed_and_eta()
     return {
         "job_id": job.job_id,
         "status": job.status,
@@ -384,8 +385,8 @@ def get_job_status(job_id: str):
         "patient_name": job.patient_name,
         "patient_id": job.patient_id,
         "queue_position": pos,
-        "elapsed_seconds": round(job.elapsed_seconds, 1),
-        "eta_seconds": round(job.eta_seconds, 1),
+        "elapsed_seconds": round(elapsed, 1),
+        "eta_seconds": round(eta, 1),
         "device": getattr(job, "device", "GPU"),
         "error_message": job.error_message,
         "is_server_paused": queue_manager.is_paused,

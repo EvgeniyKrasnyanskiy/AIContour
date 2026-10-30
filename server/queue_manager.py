@@ -126,6 +126,7 @@ class ServerJob:
         # Временные показатели
         self.elapsed_seconds = 0.0
         self.eta_seconds = 0.0
+        self.last_eta_update_time: Optional[float] = None
         
         # Результаты и ошибки
         self.error_message: Optional[str] = None
@@ -136,6 +137,39 @@ class ServerJob:
         
         # Для отмены активного процесса
         self.active_process = None
+
+    def update_progress_and_eta(self, val: int, text: str):
+        """Потокобезопасно обновляет прогресс и плавно рассчитывает оставшееся время (EMA)."""
+        now = time.time()
+        self.progress = max(self.progress, val)
+        self.current_step = text
+        self.logs.append(text)
+        
+        if self.started_at:
+            elapsed = now - self.started_at
+            self.elapsed_seconds = elapsed
+            if 8 <= self.progress < 100:
+                raw_eta = (elapsed / self.progress) * (100 - self.progress)
+                if self.eta_seconds <= 0.0:
+                    self.eta_seconds = raw_eta
+                else:
+                    smoothed = 0.15 * raw_eta + 0.85 * self.eta_seconds
+                    self.eta_seconds = min(smoothed, self.eta_seconds * 1.25)
+                self.last_eta_update_time = now
+            elif self.progress >= 100:
+                self.eta_seconds = 0.0
+
+    def get_effective_elapsed_and_eta(self) -> Tuple[float, float]:
+        """Возвращает актуальное текущее время выполнения и плавно убывающий ETA."""
+        now = time.time()
+        if self.status == "PROCESSING" and self.started_at:
+            elapsed = now - self.started_at
+            eta = self.eta_seconds
+            if eta > 0.0 and self.last_eta_update_time:
+                time_since_update = now - self.last_eta_update_time
+                eta = max(5.0, eta - time_since_update)
+            return elapsed, eta
+        return self.elapsed_seconds, self.eta_seconds
 
 class QueueManager:
     """Класс для потокобезопасного управления очередью задач ИИ."""
@@ -359,6 +393,7 @@ class QueueManager:
             for i, j in enumerate(all_jobs):
                 pos = str(i + 1)
                 
+                elapsed, eta = j.get_effective_elapsed_and_eta()
                 info_list.append({
                     "job_id": j.job_id,
                     "position": pos,
@@ -370,8 +405,8 @@ class QueueManager:
                     "progress": j.progress,
                     "current_step": j.current_step,
                     "created_at": time.strftime("%H:%M:%S", time.localtime(j.created_at)),
-                    "elapsed": round(j.elapsed_seconds, 1),
-                    "eta": round(j.eta_seconds, 1)
+                    "elapsed": round(elapsed, 1),
+                    "eta": round(eta, 1)
                 })
             return info_list
 
@@ -546,13 +581,7 @@ class QueueManager:
                         w_logs = st_data.get("logs", [])
                         
                         with self.lock:
-                            job.progress = w_prog
-                            job.current_step = f"[{worker.name}] {w_step}"
-                            if job.started_at and w_prog > 2:
-                                elapsed = time.time() - job.started_at
-                                job.elapsed_seconds = elapsed
-                                job.eta_seconds = (elapsed / w_prog) * (100 - w_prog)
-                                
+                            job.update_progress_and_eta(w_prog, f"[{worker.name}] {w_step}")
                             if len(w_logs) > last_log_len:
                                 for nl in w_logs[last_log_len:]:
                                     job.logs.append(f"[{worker.name}] {nl}")
@@ -685,14 +714,7 @@ class QueueManager:
             def prog_cb(val: int, text: str):
                 with self.lock:
                     if job.status != "CANCELLED":
-                        job.progress = val
-                        job.current_step = text
-                        job.logs.append(text)
-                        if job.started_at:
-                            elapsed = time.time() - job.started_at
-                            job.elapsed_seconds = elapsed
-                            if val > 2:
-                                job.eta_seconds = (elapsed / val) * (100 - val)
+                        job.update_progress_and_eta(val, text)
             
             def is_canc_cb() -> bool:
                 with self.lock:
@@ -731,8 +753,7 @@ class QueueManager:
                 raise RuntimeError("Операция отменена пользователем.")
             
             # 4. Упаковываем полученные результаты в ZIP-архив для скачивания клиентом
-            job.current_step = "Архивирование результатов..."
-            job.progress = 95
+            job.update_progress_and_eta(95, "Архивирование результатов...")
             
             result_zip = job_dir / "result.zip"
             self._zip_output_dir(output_workspace_dir, result_zip)

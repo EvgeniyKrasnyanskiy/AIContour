@@ -1306,11 +1306,26 @@ class ContourEngine:
                     "Пожалуйста, выберите другие органы риска (например, мочевой пузырь или кости)."
                 )
 
+            total_tasks = len(tasks_to_run)
+            max_reported_progress = 5
+
             # Выполняем ИИ-модели последовательно для каждой задачи
             for task_index, (task_name, task_rois) in enumerate(tasks_to_run.items(), start=1):
                 if is_cancelled_cb and is_cancelled_cb():
                     raise RuntimeError("Операция отменена пользователем.")
-                    
+
+                # Доля текущей задачи в общем диапазоне этапа ИИ (10% - 88%)
+                task_span = 78.0 / max(1, total_tasks)
+                task_start_pct = 10.0 + (task_index - 1) * task_span
+                task_end_pct = task_start_pct + task_span
+
+                def emit_progress(target_pct: float, txt_msg: str):
+                    nonlocal max_reported_progress
+                    pct = max(max_reported_progress, min(90, int(target_pct)))
+                    max_reported_progress = pct
+                    if progress_callback:
+                        progress_callback(pct, txt_msg)
+
                 cmd = [
                     sys.executable,
                     "-m",
@@ -1369,7 +1384,6 @@ class ContourEngine:
                     
                 current_loop_index = 0
                 max_parts = 3
-                total_tasks = len(tasks_to_run)
                 is_downloading = False
                 download_task_info = ""
                 last_reported_pct = -1
@@ -1422,8 +1436,7 @@ class ContourEngine:
                                         step_callback(f"[TotalSegmentator {task_name}]: Загрузка весов ИИ-модели из сети ({clean_line})...")
                                     except Exception:
                                         pass
-                                if progress_callback:
-                                    progress_callback(5, f"Шаг 2/5: Загрузка весов ИИ-модели из сети ({clean_line})...")
+                                emit_progress(task_start_pct + 1, f"Шаг 2/5: Загрузка весов ИИ-модели из сети ({clean_line})...")
                                 continue
 
                             if "Download finished" in clean_line:
@@ -1434,8 +1447,7 @@ class ContourEngine:
                                         step_callback(f"[TotalSegmentator {task_name}]: Распаковка загруженных весов...")
                                     except Exception:
                                         pass
-                                if progress_callback:
-                                    progress_callback(6, f"Шаг 2/5: Распаковка весов ИИ-модели...")
+                                emit_progress(task_start_pct + 2, f"Шаг 2/5: Распаковка весов ИИ-модели...")
                                 continue
 
                             # 2. Определение этапов инференса
@@ -1451,9 +1463,9 @@ class ContourEngine:
                                         step_callback(txt)
                                     except Exception:
                                         pass
-                                if progress_callback:
-                                    calc_pct = 10 + int((((task_index - 1) * (max_parts + 1)) + current_loop_index) / (total_tasks * (max_parts + 1)) * 80)
-                                    progress_callback(min(90, calc_pct), txt)
+                                part_frac = (current_loop_index / max(1, max_parts + 1))
+                                calc_pct = task_start_pct + (task_span * 0.08) + part_frac * (task_span * 0.88)
+                                emit_progress(calc_pct, txt)
                                 continue
 
                             if "Generating rough segmentation" in clean_line:
@@ -1466,8 +1478,7 @@ class ContourEngine:
                                         step_callback(txt)
                                     except Exception:
                                         pass
-                                if progress_callback:
-                                    progress_callback(10, txt)
+                                emit_progress(task_start_pct + min(3.0, task_span * 0.08), txt)
                                 continue
 
                             if "Saving segmentations" in clean_line:
@@ -1479,8 +1490,7 @@ class ContourEngine:
                                         step_callback(txt)
                                     except Exception:
                                         pass
-                                if progress_callback:
-                                    progress_callback(88, txt)
+                                emit_progress(task_end_pct, txt)
                                 continue
 
                             # 3. Обработка tqdm-прогрессбара (для скачивания и инференса)
@@ -1488,29 +1498,28 @@ class ContourEngine:
                             if match:
                                 sub_percent = int(match.group(1))
                                 if is_downloading:
-                                    if progress_callback and sub_percent != last_reported_pct:
+                                    if sub_percent != last_reported_pct:
                                         last_reported_pct = sub_percent
                                         txt = f"Шаг 2/5: Загрузка весов ИИ-модели из сети ({download_task_info}) {sub_percent}%..."
-                                        progress_callback(5, txt)
+                                        dl_pct = task_start_pct + (sub_percent / 100.0) * min(3.0, task_span * 0.08)
+                                        emit_progress(dl_pct, txt)
                                 else:
                                     # Автодетекция перехода к следующей части нейросети, если tqdm сбросился в 0 после завершения предыдущей
                                     if last_reported_pct >= 90 and sub_percent < 20:
                                         current_loop_index += 1
                                         max_parts = max(max_parts, current_loop_index)
 
-                                    total_units = max(1, (max_parts + 1) * total_tasks)
-                                    current_unit = (task_index - 1) * (max_parts + 1) + current_loop_index
-                                    global_ai_percent = 10 + int((current_unit * 100 + sub_percent) / (total_units * 100) * 80)
-                                    global_ai_percent = min(90, max(5, global_ai_percent))
+                                    part_fraction = (current_loop_index + sub_percent / 100.0) / max(1, max_parts + 1)
+                                    calc_pct = task_start_pct + (task_span * 0.08) + part_fraction * (task_span * 0.88)
 
                                     if current_loop_index == 0:
                                         txt = f"Шаг 2/5: ИИ определяет границы тела (Задача {task_index}/{total_tasks}: {task_name}) {sub_percent}%..."
                                     else:
                                         txt = f"Шаг 2/5: ИИ оконтуривает структуры (Задача {task_index}/{total_tasks}: {task_name}). Расчет части {current_loop_index} ({sub_percent}%)..."
                                     
-                                    if progress_callback and sub_percent != last_reported_pct:
+                                    if sub_percent != last_reported_pct:
                                         last_reported_pct = sub_percent
-                                        progress_callback(global_ai_percent, txt)
+                                        emit_progress(calc_pct, txt)
                                 # Пропускаем спам tqdm из общего логирования
                                 continue
 
@@ -1809,7 +1818,9 @@ class ContourEngine:
 
             for idx, (mask_file, organ_name) in enumerate(resolved_mask_items):
                 if progress_callback:
-                    prog = 95 + int((idx / len(resolved_mask_items)) * 5)
+                    prog = 88 + int((idx / max(1, len(resolved_mask_items))) * 10)
+                    prog = max(max_reported_progress, min(98, prog))
+                    max_reported_progress = prog
                     progress_callback(prog, f"Шаг 4/5: Сглаживание и фильтрация ROI {organ_name}...")
                 
                 # Фильтруем по списку целевых органов (если это не сверхбыстрый режим body, где ищется всё тело)
@@ -1947,6 +1958,8 @@ class ContourEngine:
             # ----------------------------------------------------------------------
             if step_callback:
                 step_callback("Шаг 5 из 5: Успешно сохранено!")
+            if progress_callback:
+                progress_callback(100, "Шаг 5/5: Успешно сохранено!")
             logger.info("--- Шаг 5 из 5: Запись итогового DICOM RTSTRUCT ---")
             output_dir.mkdir(parents=True, exist_ok=True)
             
