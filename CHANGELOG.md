@@ -5,7 +5,7 @@
 
 ## [Unreleased]
 
-## [2.0.42] - 2026-10-30
+## [2.0.43] - 2026-10-30
 - **Сохранение IP Monaco и надежный экспорт в режиме Elekta mod:**
   - Поле «IP Монако» (`elekta_monaco_ip_edit`) теперь сохраняется в `client_settings.ini` (`QSettings`) и загружается при запуске клиента.
   - В [elekta_mod.py](file:///d:/ASS/elekta_mod.py) метод `send_back_to_monaco` обновлён для явного приёма параметров `destination_ip`, `destination_port` и `destination_aet`. Устранена зависимость от промежуточной переменной `last_monaco_ip` в оперативной памяти — отправка всегда осуществляется на указанный в GUI адрес Monaco.
