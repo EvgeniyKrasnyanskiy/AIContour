@@ -2,10 +2,15 @@
 set "PATH=%SystemRoot%\System32;%SystemRoot%;%PATH%"
 cd /d "%~dp0"
 
-:: Отключение прокси
+rem Clear proxy settings to prevent Master connection errors
 set HTTP_PROXY=
 set HTTPS_PROXY=
 set NO_PROXY=*
+set ASS_CLUSTER_ROLE=worker
+if not defined ASS_MASTER_URL set ASS_MASTER_URL=http://192.168.5.195:8000
+if not defined ASS_WORKER_NAME set ASS_WORKER_NAME=Worker-01
+if not defined ASS_WORKER_ID set ASS_WORKER_ID=worker_01
+if not defined ASS_WORKER_PORT set ASS_WORKER_PORT=8000
 
 if exist "%~dp0totalseg_home\nnunet" (
     set "TOTALSEG_HOME_DIR=%~dp0totalseg_home"
@@ -20,11 +25,6 @@ if exist "%~dp0venv\Scripts\pythonw.exe" (
 )
 
 if exist "%~dp0venv\pythonw.exe" (
-    if exist "%~dp0venv\Lib\site-packages\dataclasses.py" del /f /q "%~dp0venv\Lib\site-packages\dataclasses.py" >nul 2>&1
-    if exist "%~dp0venv\Lib\site-packages\dataclasses-0.6.dist-info" rd /s /q "%~dp0venv\Lib\site-packages\dataclasses-0.6.dist-info" >nul 2>&1
-    if exist "%~dp0venv\Lib\site-packages\argparse.py" del /f /q "%~dp0venv\Lib\site-packages\argparse.py" >nul 2>&1
-    set "PYTHONHOME=%~dp0venv"
-    set "PYTHONPATH=%~dp0;%~dp0venv\Lib;%~dp0venv\Lib\site-packages"
     start "" "%~dp0venv\pythonw.exe" server\main.py
     exit /b 0
 )

@@ -4,6 +4,9 @@
 Формат соответствует [Keep a Changelog](https://keepachangelog.com/ru/1.0.0/).
 
 ## [Unreleased]
+- **Исправление тихого запуска воркера без консоли (`pythonw.exe`):**
+  - В [server/main.py](file:///d:/ASS/server/main.py) добавлена безопасная переадресация стандартных потоков вывода `sys.stdout` и `sys.stderr` в файлы логов `logs/server_stdout.log` и `logs/server_backend.log` (с резервным откатом в `os.devnull`). Это предотвращает падение `uvicorn.logging` с ошибкой `AttributeError: 'NoneType' object has no attribute 'isatty'` при отсутствии подключенной консоли Windows.
+  - В [run_worker_no_console.bat](file:///d:/ASS/run_worker_no_console.bat) добавлены переменные окружения кластера (`ASS_CLUSTER_ROLE=worker`, `ASS_MASTER_URL`, `ASS_WORKER_PORT`) и автосоздание каталога `logs/`.
 
 ## [2.0.43] - 2026-10-30
 - **Сохранение IP Monaco и надежный экспорт в режиме Elekta mod:**

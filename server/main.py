@@ -16,12 +16,25 @@ from logging.handlers import RotatingFileHandler
 # Добавляем корень проекта в пути импорта
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-# Настройка логирования бэкенда
+# Настройка логирования бэкенда и безопасная инициализация потоков для pythonw.exe
 try:
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
 except Exception:
-    pass
+    log_dir = None
+
+if sys.stdout is None:
+    try:
+        sys.stdout = open(Path("logs/server_stdout.log"), "a", encoding="utf-8", buffering=1)
+    except Exception:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+
+if sys.stderr is None:
+    try:
+        sys.stderr = open(Path("logs/server_backend.log"), "a", encoding="utf-8", buffering=1)
+    except Exception:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
 
 log_formatter = logging.Formatter('[%(asctime)s] %(levelname)s [%(name)s]: %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 stream_handler = logging.StreamHandler(sys.stdout)
